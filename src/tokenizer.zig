@@ -7,6 +7,39 @@ pub const Token = struct {
     pub const Loc = struct {
         start: usize,
         end: usize,
+
+        pub const Extra = struct {
+            line: usize,
+            col: usize,
+            line_start: usize,
+            line_end: usize,
+        };
+
+        pub fn extraInfo(self: Loc, source: []const u8) Extra {
+            var result = Extra{
+                .line = 1,
+                .col = 1,
+                .line_start = 0,
+                .line_end = source.len,
+            };
+
+            for (source[0..self.start]) |c, i| {
+                if (c == '\n') {
+                    result.line += 1;
+                    result.line_start = i;
+                }
+            }
+
+            for (source[self.end..]) |c, i| {
+                if (c == '\n') {
+                    result.line_end = self.end + i;
+                    break;
+                }
+            }
+
+            result.col += self.start - result.line_start;
+            return result;
+        }
     };
 
     pub const Tag = enum {
@@ -14,13 +47,13 @@ pub const Token = struct {
         invalid,
 
         identifier,
-        /// float literal with no suffix
+        /// float literal without suffix
         float,
         /// float literal with an 'f' suffix
         float_f,
         /// float literal with an 'h' suffix
         float_h,
-        /// integer literal with no suffix
+        /// integer literal without suffix
         int,
         /// integer literal with an 'i' suffix
         int_i,
@@ -374,6 +407,17 @@ pub const Token = struct {
                 .keyword_vec3 => "vec3",
                 .keyword_vec4 => "vec4",
                 .keyword_while => "while",
+            };
+        }
+
+        pub fn symbol(tag: Tag) []const u8 {
+            return tag.lexeme() orelse switch (tag) {
+                .eof => "EOF",
+                .invalid => "invalid bytes",
+                .identifier => "an identifier",
+                .int, .int_i, .int_u => "an integer literal",
+                .float, .float_f, .float_h => "a float literal",
+                else => unreachable,
             };
         }
     };

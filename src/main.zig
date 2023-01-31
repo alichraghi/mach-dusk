@@ -5,4 +5,5 @@ const std = @import("std");
 test {
     std.testing.refAllDeclsRecursive(Token);
     std.testing.refAllDeclsRecursive(Tokenizer);
+    std.testing.refAllDeclsRecursive(@import("parser.zig"));
 }

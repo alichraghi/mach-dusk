@@ -4,4 +4,4 @@
 
 using metal::uint;
 
-constexpr constant float my_type = 12.0;
+typedef metal::float2x3 type_1[1];

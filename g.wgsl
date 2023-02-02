@@ -1,1 +1,1 @@
-const my_type = (12f);
+type t1 = array<mat2x3<bool>>;

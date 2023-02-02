@@ -1,5 +1,5 @@
-pub const Token = @import("tokenizer.zig").Token;
-pub const Tokenizer = @import("tokenizer.zig").Tokenizer;
+pub const Token = @import("Token.zig");
+pub const Tokenizer = @import("Tokenizer.zig");
 
 const std = @import("std");
 test {

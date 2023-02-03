@@ -3,13 +3,14 @@ const Token = @import("Token.zig");
 
 const Ast = @This();
 
+/// Entry of the parse result.
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
-
-/// Contains expressions referenced in global
+/// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
-/// Contains additional information that an Expression in `expressions` may need.
-/// For example, list of arguments expressions in `Expression.construct.components`
+/// Contains additional information that an Expression in `expressions` may need
+/// e.g. list of arguments expressions in `Expression.construct.components`
 expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
+/// Contains Type's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
@@ -17,6 +18,17 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.expressions.deinit(allocator);
     self.expressions_extra.deinit(allocator);
     self.types.deinit(allocator);
+}
+
+pub fn Index(comptime _: type) type {
+    return usize;
+}
+
+pub fn Range(comptime _: type) type {
+    return struct {
+        start: usize,
+        end: usize,
+    };
 }
 
 pub const GlobalDecl = union(enum) {
@@ -35,26 +47,33 @@ pub const Const = struct {};
 
 pub const Struct = struct {};
 
-pub fn Index(comptime _: type) type {
-    return usize;
-}
-
-pub fn Range(comptime _: type) type {
-    return struct {
-        start: usize,
-        end: usize,
-    };
-}
-
-pub const Literal = union(enum) {
-    number: Number,
-    bool: bool,
-};
-
 pub const Expression = union(enum) {
     literal: Literal,
     construct: struct {
-        type: ConstructorType,
+        type: union(enum) {
+            /// f32(1.0)
+            scalar: ScalarType,
+            /// vec3(1.0)
+            partial_vector: struct {
+                size: VectorType.Size,
+            },
+            /// vec3<f32>(1.0)
+            vector: VectorType,
+            /// mat2x2(1,2,3,4)
+            partial_matrix: struct {
+                rows: VectorType.Size,
+                columns: VectorType.Size,
+            },
+            /// mat2x2<f32>(1,2,3,4)
+            matrix: MatrixType,
+            /// array(1, 2, 3)
+            partial_array,
+            /// array<i32>(1, 2, 3)
+            array: ArrayType,
+            /// type my_vec = vec3<f32>;
+            /// my_vec(1.0)
+            user: []const u8,
+        },
         components: Range(Index(Expression)),
     },
     unary_operator: struct {
@@ -70,7 +89,7 @@ pub const Expression = union(enum) {
     },
     call: struct {
         function: []const u8,
-        arguments: []const Expression,
+        arguments: Range(Index(Expression)),
     },
     index: struct {
         base: Index(Expression),
@@ -87,57 +106,9 @@ pub const Expression = union(enum) {
     },
 };
 
-pub const UnaryOperator = enum {
-    negate,
-    not,
-};
-
-pub const BinaryOperator = enum {
-    add,
-    subtract,
-    multiply,
-    divide,
-    modulo,
-    equal,
-    not_equal,
-    less,
-    less_equal,
-    greater,
-    greater_equal,
-    @"and",
-    exclusive_or,
-    inclusive_or,
-    logical_and,
-    logical_or,
-    shift_left,
-    shift_right,
-};
-
-pub const ConstructorType = union(enum) {
-    /// f32(1.0)
-    scalar: ScalarType,
-
-    /// vec3(1.0)
-    partial_vector: PartialVectorType,
-
-    /// vec3<f32>(1.0)
-    vector: VectorType,
-
-    /// mat2x2(1,2,3,4)
-    partial_matrix: PartialMatrixType,
-
-    /// mat2x2<f32>(1,2,3,4)
-    matrix: MatrixType,
-
-    /// array(1, 2, 3)
-    partial_array,
-
-    /// array<i32>(1, 2, 3)
-    array: ArrayType,
-
-    /// type my_vec = vec3<f32>;
-    /// my_vec(1.0)
-    user: []const u8,
+pub const Literal = union(enum) {
+    number: Number,
+    bool: bool,
 };
 
 pub const Number = union(enum) {
@@ -145,14 +116,58 @@ pub const Number = union(enum) {
     abstract_int: i64,
     /// Abstract Float (IEEE-754 binary64)
     abstract_float: f64,
-    /// Concrete i32
+    /// i32
     i32: i32,
-    /// Concrete u32
+    /// u32
     u32: u32,
-    /// Concrete f32
+    /// f32
     f32: f32,
-    /// Concrete f16
+    /// f16
     f16: f32,
+};
+
+pub const UnaryOperator = enum {
+    negate,
+    not,
+};
+
+pub const BinaryOperator = enum {
+    /// +
+    add,
+    /// -
+    subtract,
+    /// *
+    multiply,
+    /// /
+    divide,
+    /// %
+    modulo,
+    /// ==
+    equal,
+    /// !=
+    not_equal,
+    /// <
+    less,
+    /// <=
+    less_equal,
+    /// >
+    greater,
+    /// >=
+    greater_equal,
+    /// &
+    @"and",
+    /// ^
+    exclusive_or,
+    /// |
+    inclusive_or,
+    /// &&
+    logical_and,
+    /// ||
+    logical_or,
+    /// <<
+    shift_left,
+    /// >>
+    shift_right,
 };
 
 pub const TypeAlias = struct {
@@ -162,29 +177,33 @@ pub const TypeAlias = struct {
 
 pub const Type = union(enum) {
     scalar: ScalarType,
-    atomic: AtomicType,
     vector: VectorType,
     matrix: MatrixType,
-    array: ArrayType,
     sampler: SamplerType,
+    atomic: AtomicType,
+    array: ArrayType,
     /// A user-defined type, like a struct or a type alias.
     user: []const u8,
 };
 
-pub const ScalarType = struct {
-    pub const Kind = enum {
-        int,
-        uint,
-        float,
-        bool,
-    };
+pub const ScalarType = enum {
+    i32,
+    u32,
+    f32,
+    f16,
+    bool,
 
-    kind: Kind,
-    width: u8,
+    pub fn size(self: ScalarType) u8 {
+        return switch (self) {
+            .i32, .u32, .f32 => 4,
+            .f16 => 2,
+            .bool => 1,
+        };
+    }
 };
 
-pub const AtomicType = struct {
-    element_type: ScalarType,
+pub const SamplerType = struct {
+    comparison: bool,
 };
 
 pub const VectorType = struct {
@@ -198,30 +217,22 @@ pub const VectorType = struct {
     element_type: ScalarType,
 };
 
-pub const PartialVectorType = struct {
-    size: VectorType.Size,
-};
-
 pub const MatrixType = struct {
     rows: VectorType.Size,
     columns: VectorType.Size,
     element_type: ScalarType,
 };
 
-pub const PartialMatrixType = struct {
-    rows: VectorType.Size,
-    columns: VectorType.Size,
+pub const AtomicType = struct {
+    element_type: ScalarType,
 };
 
 pub const ArrayType = struct {
     pub const Size = union(enum) {
-        constant: Index(Expression),
+        static: Index(Expression),
         dynamic,
     };
-    element_type: Index(Type),
-    size: Size,
-};
 
-pub const SamplerType = struct {
-    comparison: bool,
+    size: Size,
+    element_type: Index(Type),
 };

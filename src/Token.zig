@@ -277,8 +277,8 @@ pub const Tag = enum {
     /// 'while'
     keyword_while,
 
-    pub fn lexeme(tag: Tag) ?[]const u8 {
-        return switch (tag) {
+    pub fn lexeme(self: Tag) ?[]const u8 {
+        return switch (self) {
             .eof,
             .invalid,
             .identifier,
@@ -398,13 +398,60 @@ pub const Tag = enum {
         };
     }
 
-    pub fn symbol(tag: Tag) []const u8 {
-        return tag.lexeme() orelse switch (tag) {
+    pub fn symbol(self: Tag) []const u8 {
+        return self.lexeme() orelse switch (self) {
             .eof => "EOF",
             .invalid => "invalid bytes",
             .identifier => "an identifier",
             .number => "a number literal",
             else => unreachable,
+        };
+    }
+
+    pub fn isScalarType(self: Tag) bool {
+        return switch (self) {
+            .keyword_i32,
+            .keyword_u32,
+            .keyword_f32,
+            .keyword_f16,
+            .keyword_bool,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isVectorType(self: Tag) bool {
+        return switch (self) {
+            .keyword_vec2,
+            .keyword_vec3,
+            .keyword_vec4,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isMatrixType(self: Tag) bool {
+        return switch (self) {
+            .keyword_mat2x2,
+            .keyword_mat2x3,
+            .keyword_mat2x4,
+            .keyword_mat3x2,
+            .keyword_mat3x3,
+            .keyword_mat3x4,
+            .keyword_mat4x2,
+            .keyword_mat4x3,
+            .keyword_mat4x4,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isSamplerType(self: Tag) bool {
+        return switch (self) {
+            .keyword_sampler,
+            .keyword_comparison_sampler,
+            => true,
+            else => false,
         };
     }
 };

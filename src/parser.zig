@@ -62,6 +62,7 @@ const Parser = struct {
         };
     };
 
+    /// print beauty errors to stderr
     pub fn emitErrors(self: Parser) !void {
         const stderr = std.io.getStdErr().writer();
         var bw = std.io.bufferedWriter(stderr);
@@ -71,14 +72,14 @@ const Parser = struct {
         for (self.errors.items) |err| {
             const loc_extra = err.token.loc.extraInfo(self.source);
 
-            // print file:line:column
+            // file:line:column
             try cfg.setColor(bw_writer, .Bold);
             try bw_writer.print(":{d}:{d} ", .{ loc_extra.line, loc_extra.col });
 
             try cfg.setColor(bw_writer, .Red);
             try bw_writer.writeAll("error: ");
 
-            // print error message
+            // error message
             try cfg.setColor(bw_writer, .Reset);
             try cfg.setColor(bw_writer, .Bold);
             switch (err.tag) {
@@ -111,12 +112,12 @@ const Parser = struct {
             }
             try bw_writer.writeByte('\n');
 
-            // print error line
+            // error line
             try cfg.setColor(bw_writer, .Reset);
             try bw_writer.writeAll(self.source[loc_extra.line_start..loc_extra.line_end]);
             try bw_writer.writeByte('\n');
 
-            // print error location pointer ('^')
+            // error location pointer ('^')
             try bw_writer.writeByteNTimes(' ', loc_extra.col - 1);
             try cfg.setColor(bw_writer, .Bold);
             try cfg.setColor(bw_writer, .Green);
@@ -148,6 +149,7 @@ const Parser = struct {
         }
     }
 
+    /// TODO
     fn parseExpr(self: *Parser) !Ast.Index(Ast.Expression) {
         const token = self.nextToken();
         switch (token.tag) {
@@ -163,13 +165,13 @@ const Parser = struct {
             .keyword_vec4,
             => {
                 if (self.eatToken(.less_than)) |_| {
-                    const base = try self.parseScalar();
+                    const elem_type = try self.parseScalarType();
                     _ = try self.expectToken(.greater_than);
                     const args = try self.parseArguments();
 
                     return self.addExpr(.{ .construct = .{
                         .type = .{
-                            .vector = .{ .size = tokenToVectorSize(token.tag), .base = base },
+                            .vector = .{ .size = tokenToVectorSize(token.tag), .element_type = elem_type },
                         },
                         .components = args,
                     } });
@@ -207,7 +209,7 @@ const Parser = struct {
         }
     }
 
-    /// expects '(' to be consumed
+    /// Arguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
     fn parseArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Index(Ast.Expression)) {
         _ = try self.expectToken(.paren_left);
 
@@ -241,35 +243,28 @@ const Parser = struct {
     fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
         const name = try self.expectToken(.identifier);
         _ = try self.expectToken(.equal);
-        const value = try self.parseTypeDecl();
+        const value = try self.parseType();
         _ = try self.expectToken(.semicolon);
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
-    /// TypeDecl
+    /// Type
     ///     <- ScalarType
     ///      / VectorType
     ///      / MatrixType
     ///      / AtomicType
     ///      / ArrayType
     ///--------------------------------------------------------------------------------
-    /// ScalarType
-    ///     <- KEYWORD_i32
-    ///      / KEYWORD_u32
-    ///      / KEYWORD_f32
-    ///      / KEYWORD_f16
-    ///      / KEYWORD_bool
-    ///--------------------------------------------------------------------------------
-    /// AtomicType <- KEYWORD_atomic less_than KEYWORD_i32 / KEYWORD_u32 greater_than
+    /// AtomicType <- KEYWORD_atomic LESS_THAN KEYWORD_i32 / KEYWORD_u32 GREATER_THAN
     ///--------------------------------------------------------------------------------
     /// ArrayType
-    ///     <- KEYWORD_array less_than
+    ///     <- KEYWORD_array LESS_THAN
     ///        ScalarType
     ///      / VectorType
     ///      / MatrixType
     ///      / AtomicType
     ///      / ArrayType
-    ///      / StructType greater_than
+    ///      / StructType GREATER_THAN
     ///
     /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
     ///--------------------------------------------------------------------------------
@@ -277,7 +272,7 @@ const Parser = struct {
     ///     <- KEYWORD_vec2
     ///      / KEYWORD_vec3
     ///      / KEYWORD_vec4
-    ///     less_than ScalarType greater_than
+    ///     LESS_THAN ScalarType GREATER_THAN
     ///--------------------------------------------------------------------------------
     /// MatrixType
     ///     <- KEYWORD_mat2x2
@@ -289,10 +284,12 @@ const Parser = struct {
     ///      / KEYWORD_mat4x2
     ///      / KEYWORD_mat4x3
     ///      / KEYWORD_mat4x4
-    ///     less_than KEYWORD_f32 / KEYWORD_f16 greater_than
+    ///     LESS_THAN KEYWORD_f32 / KEYWORD_f16 GREATER_THAN
     ///--------------------------------------------------------------------------------
     /// UserType <- IDENTIFIER
-    fn parseTypeDecl(self: *Parser) !Ast.Type {
+    ///
+    /// TODO: separate parse function for each type
+    fn parseType(self: *Parser) !Ast.Type {
         const token = self.nextToken();
         switch (token.tag) {
             .keyword_i32,
@@ -305,9 +302,9 @@ const Parser = struct {
             },
             .keyword_atomic => {
                 _ = try self.expectToken(.less_than);
-                const base = try self.parseScalar();
+                const elem_type = try self.parseScalarType();
                 _ = try self.expectToken(.greater_than);
-                return .{ .atomic = .{ .base = base } };
+                return .{ .atomic = .{ .element_type = elem_type } };
             },
             .keyword_sampler => {
                 return .{ .sampler = .{ .comparison = false } };
@@ -317,25 +314,25 @@ const Parser = struct {
             },
             .keyword_array => {
                 _ = try self.expectToken(.less_than);
-                const base = self.ast.types.items.len;
-                try self.ast.types.append(self.allocator, try self.parseTypeDecl());
+                const elem_type = self.ast.types.items.len;
+                try self.ast.types.append(self.allocator, try self.parseType());
 
                 // dynamic size
                 _ = self.eatToken(.comma) orelse {
                     _ = try self.expectToken(.greater_than);
-                    return .{ .array = .{ .base = base, .size = .dynamic } };
+                    return .{ .array = .{ .element_type = elem_type, .size = .dynamic } };
                 };
 
                 // constant size
                 const size = try self.parseExpr();
                 _ = try self.expectToken(.greater_than);
-                return .{ .array = .{ .base = base, .size = .{ .constant = size } } };
+                return .{ .array = .{ .element_type = elem_type, .size = .{ .constant = size } } };
             },
             .keyword_vec2, .keyword_vec3, .keyword_vec4 => {
                 _ = try self.expectToken(.less_than);
-                const base = try self.parseScalar();
+                const elem_type = try self.parseScalarType();
                 _ = try self.expectToken(.greater_than);
-                return .{ .vector = .{ .base = base, .size = tokenToVectorSize(token.tag) } };
+                return .{ .vector = .{ .element_type = elem_type, .size = tokenToVectorSize(token.tag) } };
             },
             .keyword_mat2x2,
             .keyword_mat2x3,
@@ -348,10 +345,20 @@ const Parser = struct {
             .keyword_mat4x4,
             => {
                 _ = try self.expectToken(.less_than);
-                const base = try self.parseMatrixBase();
+
+                const elem_type_token = self.eatToken(.keyword_f16) orelse
+                    self.eatToken(.keyword_f32) orelse {
+                    try self.addError(.{
+                        .token = token,
+                        .tag = .{ .expected_float_type = {} },
+                    });
+                    return error.Parsing;
+                };
+                const elem_type = tokenToScalarType(elem_type_token.tag);
+
                 _ = try self.expectToken(.greater_than);
                 return .{ .matrix = .{
-                    .base = base,
+                    .element_type = elem_type,
                     .rows = tokenToMatrixRows(token.tag),
                     .columns = tokenToMatrixColumns(token.tag),
                 } };
@@ -369,7 +376,13 @@ const Parser = struct {
         }
     }
 
-    fn parseScalar(self: *Parser) !Ast.ScalarType {
+    /// ScalarType
+    ///     <- KEYWORD_i32
+    ///      / KEYWORD_u32
+    ///      / KEYWORD_f32
+    ///      / KEYWORD_f16
+    ///      / KEYWORD_bool
+    fn parseScalarType(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         switch (token.tag) {
             .keyword_i32,
@@ -382,22 +395,6 @@ const Parser = struct {
                 try self.addError(.{
                     .token = token,
                     .tag = .{ .expected_scalar_type = {} },
-                });
-                return error.Parsing;
-            },
-        }
-    }
-
-    fn parseMatrixBase(self: *Parser) !Ast.ScalarType {
-        const token = self.nextToken();
-        switch (token.tag) {
-            .keyword_f16,
-            .keyword_f32,
-            => return tokenToScalarType(token.tag),
-            else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_float_type = {} },
                 });
                 return error.Parsing;
             },
@@ -501,8 +498,8 @@ test {
 
     const t1 = p.globals.items[0].type_alias;
     const array_i32 = t1.type.array;
-    const array_i32_base = p.types.items[array_i32.base];
-    try std.testing.expectEqual(Ast.Type{ .scalar = .{ .kind = .int, .width = 4 } }, array_i32_base);
+    const array_i32_elem_type = p.types.items[array_i32.element_type];
+    try std.testing.expectEqual(Ast.Type{ .scalar = .{ .kind = .int, .width = 4 } }, array_i32_elem_type);
 
     const vec3_expr = p.expressions.items[array_i32.size.constant].construct;
     const vec3_comps = p.expressions_extra.items[vec3_expr.components.start..vec3_expr.components.end];

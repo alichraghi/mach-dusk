@@ -184,7 +184,7 @@ pub const ScalarType = struct {
 };
 
 pub const AtomicType = struct {
-    base: ScalarType,
+    element_type: ScalarType,
 };
 
 pub const VectorType = struct {
@@ -195,7 +195,7 @@ pub const VectorType = struct {
     };
 
     size: Size,
-    base: ScalarType,
+    element_type: ScalarType,
 };
 
 pub const PartialVectorType = struct {
@@ -205,7 +205,7 @@ pub const PartialVectorType = struct {
 pub const MatrixType = struct {
     rows: VectorType.Size,
     columns: VectorType.Size,
-    base: ScalarType,
+    element_type: ScalarType,
 };
 
 pub const PartialMatrixType = struct {
@@ -218,7 +218,7 @@ pub const ArrayType = struct {
         constant: Index(Expression),
         dynamic,
     };
-    base: Index(Type),
+    element_type: Index(Type),
     size: Size,
 };
 

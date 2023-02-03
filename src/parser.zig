@@ -10,7 +10,7 @@ pub fn parse(
 ) !Ast {
     var tokenizer = Tokenizer.init(source);
     var tokens = std.ArrayList(Token).init(allocator);
-
+    defer tokens.deinit();
     while (true) {
         const tok = tokenizer.next();
         try tokens.append(tok);
@@ -20,31 +20,14 @@ pub fn parse(
     var parser = Parser{
         .allocator = allocator,
         .source = source,
-        .tokens = try tokens.toOwnedSlice(),
+        .tokens = tokens.items,
         .tok_i = 0,
         .errors = .{},
-        .ast = .{ .globals = .{}, .array_bases = .{} },
+        .ast = .{},
     };
-    defer allocator.free(parser.tokens);
-    defer parser.errors.deinit(allocator);
-
-    while (true) {
-        const token = parser.nextToken();
-        switch (token.tag) {
-            .keyword_type => {
-                const res = parser.parseTypeAlias() catch |err| switch (err) {
-                    error.Parsing => continue,
-                    else => return err,
-                };
-                try parser.ast.globals.append(allocator, .{ .kind = .{ .type_alias = res } });
-            },
-            .eof => break,
-            else => {},
-        }
-    }
-
+    try parser.parseRoot();
     if (parser.errors.items.len > 0) {
-        defer parser.ast.deinit(allocator);
+        defer parser.deinit();
         if (options.emit_errors) try parser.emitErrors();
         return error.Parsing;
     }
@@ -60,7 +43,202 @@ const Parser = struct {
     errors: std.ArrayListUnmanaged(Error),
     ast: Ast,
 
-    pub fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
+    pub fn deinit(self: *Parser) void {
+        self.errors.deinit(self.allocator);
+        self.ast.deinit(self.allocator);
+    }
+
+    pub const Error = struct {
+        tag: Tag,
+        token: Token,
+        notes: []const []const u8 = &.{},
+
+        pub const Tag = union(enum) {
+            expected_token: Token.Tag,
+            expected_expr,
+            expected_type_decl,
+            expected_scalar_type,
+            expected_float_type,
+        };
+    };
+
+    pub fn emitErrors(self: Parser) !void {
+        const stderr = std.io.getStdErr().writer();
+        var bw = std.io.bufferedWriter(stderr);
+        const bw_writer = bw.writer();
+        const cfg = std.debug.TTY.Config{ .escape_codes = {} };
+
+        for (self.errors.items) |err| {
+            const loc_extra = err.token.loc.extraInfo(self.source);
+
+            // print file:line:column
+            try cfg.setColor(bw_writer, .Bold);
+            try bw_writer.print(":{d}:{d} ", .{ loc_extra.line, loc_extra.col });
+
+            try cfg.setColor(bw_writer, .Red);
+            try bw_writer.writeAll("error: ");
+
+            // print error message
+            try cfg.setColor(bw_writer, .Reset);
+            try cfg.setColor(bw_writer, .Bold);
+            switch (err.tag) {
+                .expected_token => |expected_token| {
+                    try bw_writer.print("expected '{s}', but found '{s}'", .{
+                        expected_token.symbol(),
+                        err.token.tag.symbol(),
+                    });
+                },
+                .expected_expr => {
+                    try bw_writer.print("expected expression, but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
+                .expected_type_decl => {
+                    try bw_writer.print("expected type declaration, but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
+                .expected_scalar_type => {
+                    try bw_writer.print("expected an scalar type ('i32', 'u32', 'f32', 'f16' or 'bool'), but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
+                .expected_float_type => {
+                    try bw_writer.print("expected a floating-point type ('f32' or 'f16'), but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
+            }
+            try bw_writer.writeByte('\n');
+
+            // print error line
+            try cfg.setColor(bw_writer, .Reset);
+            try bw_writer.writeAll(self.source[loc_extra.line_start..loc_extra.line_end]);
+            try bw_writer.writeByte('\n');
+
+            // print error location pointer ('^')
+            try bw_writer.writeByteNTimes(' ', loc_extra.col - 1);
+            try cfg.setColor(bw_writer, .Bold);
+            try cfg.setColor(bw_writer, .Green);
+            try bw_writer.writeByte('^');
+            try bw_writer.writeByte('\n');
+            try cfg.setColor(bw_writer, .Reset);
+        }
+
+        try bw.flush();
+    }
+
+    pub fn parseRoot(self: *Parser) !void {
+        self.tok_i = 0;
+        self.errors.clearAndFree(self.allocator);
+
+        while (true) {
+            const token = self.nextToken();
+            switch (token.tag) {
+                .keyword_type => {
+                    const res = self.parseTypeAlias() catch |err| switch (err) {
+                        error.Parsing => continue,
+                        else => return err,
+                    };
+                    _ = try self.addGlobalDecl(.{ .type_alias = res });
+                },
+                .eof => break,
+                else => {},
+            }
+        }
+    }
+
+    fn parseExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const token = self.nextToken();
+        switch (token.tag) {
+            .keyword_true => return self.addExpr(.{ .literal = .{ .bool = true } }),
+            .keyword_false => return self.addExpr(.{ .literal = .{ .bool = false } }),
+            .number => return self.addExpr(.{
+                .literal = .{
+                    .number = createNumber(token.loc.asStr(self.source)) catch unreachable, // TODO
+                },
+            }),
+            .keyword_vec2,
+            .keyword_vec3,
+            .keyword_vec4,
+            => {
+                if (self.eatToken(.less_than)) |_| {
+                    const base = try self.parseScalar();
+                    _ = try self.expectToken(.greater_than);
+                    const args = try self.parseArguments();
+
+                    return self.addExpr(.{ .construct = .{
+                        .type = .{
+                            .vector = .{ .size = tokenToVectorSize(token.tag), .base = base },
+                        },
+                        .components = args,
+                    } });
+                } else {
+                    const args = try self.parseArguments();
+
+                    return self.addExpr(.{ .construct = .{
+                        .type = .{
+                            .partial_vector = .{ .size = tokenToVectorSize(token.tag) },
+                        },
+                        .components = args,
+                    } });
+                }
+            },
+            .keyword_mat2x2,
+            .keyword_mat2x3,
+            .keyword_mat2x4,
+            .keyword_mat3x2,
+            .keyword_mat3x3,
+            .keyword_mat3x4,
+            .keyword_mat4x2,
+            .keyword_mat4x3,
+            .keyword_mat4x4,
+            => {
+                unreachable;
+                // return .{ .construct = .{ .type = try self.parseConstructorTypeOrError(), .components = undefined } };
+            },
+            else => {
+                try self.addError(.{
+                    .token = token,
+                    .tag = .{ .expected_expr = {} },
+                });
+                return error.Parsing;
+            },
+        }
+    }
+
+    /// expects '(' to be consumed
+    fn parseArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Index(Ast.Expression)) {
+        _ = try self.expectToken(.paren_left);
+
+        var args = std.ArrayList(Ast.Index(Ast.Expression)).init(self.allocator);
+        defer args.deinit();
+
+        while (true) {
+            try args.append(try self.parseExpr());
+            const token = self.nextToken();
+            switch (token.tag) {
+                .comma => {},
+                .paren_right => break,
+                else => {
+                    try self.addError(.{
+                        .token = token,
+                        .tag = .{ .expected_token = .paren_right },
+                    });
+                    return error.Parsing;
+                },
+            }
+        }
+
+        try self.ast.expressions_extra.appendSlice(self.allocator, args.items);
+        return .{
+            .start = self.ast.expressions_extra.items.len - args.items.len,
+            .end = self.ast.expressions_extra.items.len,
+        };
+    }
+
+    /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL TypeDecl
+    fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
         const name = try self.expectToken(.identifier);
         _ = try self.expectToken(.equal);
         const value = try self.parseTypeDecl();
@@ -68,22 +246,79 @@ const Parser = struct {
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
-    pub fn parseTypeDecl(self: *Parser) !Ast.Type {
+    /// TypeDecl
+    ///     <- ScalarType
+    ///      / VectorType
+    ///      / MatrixType
+    ///      / AtomicType
+    ///      / ArrayType
+    ///--------------------------------------------------------------------------------
+    /// ScalarType
+    ///     <- KEYWORD_i32
+    ///      / KEYWORD_u32
+    ///      / KEYWORD_f32
+    ///      / KEYWORD_f16
+    ///      / KEYWORD_bool
+    ///--------------------------------------------------------------------------------
+    /// AtomicType <- KEYWORD_atomic less_than KEYWORD_i32 / KEYWORD_u32 greater_than
+    ///--------------------------------------------------------------------------------
+    /// ArrayType
+    ///     <- KEYWORD_array less_than
+    ///        ScalarType
+    ///      / VectorType
+    ///      / MatrixType
+    ///      / AtomicType
+    ///      / ArrayType
+    ///      / StructType greater_than
+    ///
+    /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
+    ///--------------------------------------------------------------------------------
+    /// VectorType
+    ///     <- KEYWORD_vec2
+    ///      / KEYWORD_vec3
+    ///      / KEYWORD_vec4
+    ///     less_than ScalarType greater_than
+    ///--------------------------------------------------------------------------------
+    /// MatrixType
+    ///     <- KEYWORD_mat2x2
+    ///      / KEYWORD_mat2x3
+    ///      / KEYWORD_mat2x4
+    ///      / KEYWORD_mat3x2
+    ///      / KEYWORD_mat3x3
+    ///      / KEYWORD_mat3x4
+    ///      / KEYWORD_mat4x2
+    ///      / KEYWORD_mat4x3
+    ///      / KEYWORD_mat4x4
+    ///     less_than KEYWORD_f32 / KEYWORD_f16 greater_than
+    ///--------------------------------------------------------------------------------
+    /// UserType <- IDENTIFIER
+    fn parseTypeDecl(self: *Parser) !Ast.Type {
         const token = self.nextToken();
         switch (token.tag) {
             .keyword_i32,
             .keyword_u32,
-            .keyword_f16,
             .keyword_f32,
+            .keyword_f16,
             .keyword_bool,
             => {
                 return .{ .scalar = tokenToScalarType(token.tag) };
             },
+            .keyword_atomic => {
+                _ = try self.expectToken(.less_than);
+                const base = try self.parseScalar();
+                _ = try self.expectToken(.greater_than);
+                return .{ .atomic = .{ .base = base } };
+            },
+            .keyword_sampler => {
+                return .{ .sampler = .{ .comparison = false } };
+            },
+            .keyword_comparison_sampler => {
+                return .{ .sampler = .{ .comparison = true } };
+            },
             .keyword_array => {
                 _ = try self.expectToken(.less_than);
-
-                var base = try self.ast.array_bases.addOne(self.allocator);
-                base.* = try self.parseTypeDecl();
+                const base = self.ast.types.items.len;
+                try self.ast.types.append(self.allocator, try self.parseTypeDecl());
 
                 // dynamic size
                 _ = self.eatToken(.comma) orelse {
@@ -92,13 +327,13 @@ const Parser = struct {
                 };
 
                 // constant size
-                const size = try self.parseNumber();
+                const size = try self.parseExpr();
                 _ = try self.expectToken(.greater_than);
                 return .{ .array = .{ .base = base, .size = .{ .constant = size } } };
             },
             .keyword_vec2, .keyword_vec3, .keyword_vec4 => {
                 _ = try self.expectToken(.less_than);
-                const base = try self.parseVectorBase();
+                const base = try self.parseScalar();
                 _ = try self.expectToken(.greater_than);
                 return .{ .vector = .{ .base = base, .size = tokenToVectorSize(token.tag) } };
             },
@@ -134,19 +369,7 @@ const Parser = struct {
         }
     }
 
-    // TODO
-    pub fn parseNumber(self: *Parser) !Ast.Number {
-        const num = try self.expectToken(.number);
-        return .{
-            .abstract_int = try std.fmt.parseInt(
-                i64,
-                num.loc.asStr(self.source),
-                10,
-            ),
-        };
-    }
-
-    pub fn parseVectorBase(self: *Parser) !Ast.ScalarType {
+    fn parseScalar(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         switch (token.tag) {
             .keyword_i32,
@@ -165,19 +388,12 @@ const Parser = struct {
         }
     }
 
-    pub fn parseMatrixBase(self: *Parser) !Ast.ScalarType {
+    fn parseMatrixBase(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         switch (token.tag) {
             .keyword_f16,
             .keyword_f32,
             => return tokenToScalarType(token.tag),
-            .keyword_bool, .keyword_i32, .keyword_u32 => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .matrix_base_must_be_float = {} },
-                });
-                return error.Parsing;
-            },
             else => {
                 try self.addError(.{
                     .token = token,
@@ -188,7 +404,7 @@ const Parser = struct {
         }
     }
 
-    pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {
+    fn expectToken(self: *Parser, tag: Token.Tag) !Token {
         if (self.tokens[self.tok_i].tag == tag) {
             return self.nextToken();
         } else {
@@ -200,17 +416,17 @@ const Parser = struct {
         }
     }
 
-    pub fn eatToken(self: *Parser, tag: Token.Tag) ?Token {
+    fn eatToken(self: *Parser, tag: Token.Tag) ?Token {
         return if (self.tokens[self.tok_i].tag == tag) self.nextToken() else null;
     }
 
-    pub fn nextToken(self: *Parser) Token {
+    fn nextToken(self: *Parser) Token {
         const current = self.tokens[self.tok_i];
         self.tok_i += 1;
         return current;
     }
 
-    pub fn tokenToScalarType(tag: Token.Tag) Ast.ScalarType {
+    fn tokenToScalarType(tag: Token.Tag) Ast.ScalarType {
         return switch (tag) {
             .keyword_i32 => .{ .kind = .int, .width = 4 },
             .keyword_u32 => .{ .kind = .uint, .width = 4 },
@@ -221,7 +437,7 @@ const Parser = struct {
         };
     }
 
-    pub fn tokenToVectorSize(tag: Token.Tag) Ast.VectorType.Size {
+    fn tokenToVectorSize(tag: Token.Tag) Ast.VectorType.Size {
         return switch (tag) {
             .keyword_vec2 => .bi,
             .keyword_vec3 => .tri,
@@ -230,7 +446,7 @@ const Parser = struct {
         };
     }
 
-    pub fn tokenToMatrixColumns(tag: Token.Tag) Ast.VectorType.Size {
+    fn tokenToMatrixColumns(tag: Token.Tag) Ast.VectorType.Size {
         return switch (tag) {
             .keyword_mat2x2, .keyword_mat2x3, .keyword_mat2x4 => .bi,
             .keyword_mat3x2, .keyword_mat3x3, .keyword_mat3x4 => .tri,
@@ -239,7 +455,7 @@ const Parser = struct {
         };
     }
 
-    pub fn tokenToMatrixRows(tag: Token.Tag) Ast.VectorType.Size {
+    fn tokenToMatrixRows(tag: Token.Tag) Ast.VectorType.Size {
         return switch (tag) {
             .keyword_mat2x2, .keyword_mat3x2, .keyword_mat4x2 => .bi,
             .keyword_mat2x3, .keyword_mat3x3, .keyword_mat4x3 => .tri,
@@ -248,101 +464,63 @@ const Parser = struct {
         };
     }
 
-    pub const Error = struct {
-        tag: Tag,
-        token: Token,
-        notes: []const []const u8 = &.{},
-
-        pub const Tag = union(enum) {
-            expected_token: Token.Tag,
-            expected_type_decl,
-            expected_scalar_type,
-            expected_float_type,
-            matrix_base_must_be_float,
-        };
-    };
-
-    pub fn emitErrors(self: Parser) !void {
-        const stdout_file = std.io.getStdErr().writer();
-        var bw = std.io.bufferedWriter(stdout_file);
-        const bw_writer = bw.writer();
-        const cfg = std.debug.TTY.Config{ .escape_codes = {} };
-
-        for (self.errors.items) |err| {
-            const loc_extra = err.token.loc.extraInfo(self.source);
-
-            // print file:line:column
-            try cfg.setColor(bw_writer, .Bold);
-            try bw_writer.print(":{d}:{d} ", .{ loc_extra.line, loc_extra.col });
-
-            try cfg.setColor(bw_writer, .Red);
-            try bw_writer.writeAll("error: ");
-
-            // print error message
-            try cfg.setColor(bw_writer, .Reset);
-            try cfg.setColor(bw_writer, .Bold);
-            switch (err.tag) {
-                .expected_token => |expected_token| {
-                    try bw_writer.print("expected '{s}', but found '{s}'", .{
-                        expected_token.symbol(),
-                        err.token.tag.symbol(),
-                    });
-                },
-                .expected_type_decl => {
-                    try bw_writer.print("expected type declaration, but found '{s}'", .{
-                        err.token.tag.symbol(),
-                    });
-                },
-                .expected_scalar_type => {
-                    try bw_writer.print("expected an scalar type ('i32', 'u32', 'f32', 'f16' or 'bool'), but found '{s}'", .{
-                        err.token.tag.symbol(),
-                    });
-                },
-                .expected_float_type => {
-                    try bw_writer.print("expected a floating-point type ('f32' or 'f16'), but found '{s}'", .{
-                        err.token.tag.symbol(),
-                    });
-                },
-                .matrix_base_must_be_float => {
-                    try bw_writer.print("matrix base must be a floating-point type ('f32' or 'f16'), but found '{s}'", .{
-                        err.token.tag.symbol(),
-                    });
-                },
-            }
-            try bw_writer.writeByte('\n');
-
-            // print error line
-            try cfg.setColor(bw_writer, .Reset);
-            try bw_writer.writeAll(self.source[loc_extra.line_start..loc_extra.line_end]);
-            try bw_writer.writeByte('\n');
-
-            // print error location pointer ('^')
-            try bw_writer.writeByteNTimes(' ', loc_extra.col - 1);
-            try cfg.setColor(bw_writer, .Bold);
-            try cfg.setColor(bw_writer, .Green);
-            try bw_writer.writeByte('^');
-            try bw_writer.writeByte('\n');
-            try cfg.setColor(bw_writer, .Reset);
-        }
-
-        try bw.flush();
-    }
-
     fn addError(self: *Parser, err: Error) std.mem.Allocator.Error!void {
         try self.errors.append(self.allocator, err);
     }
+
+    fn addExpr(self: *Parser, expr: Ast.Expression) std.mem.Allocator.Error!Ast.Index(Ast.Expression) {
+        const i = self.ast.expressions.items.len;
+        try self.ast.expressions.append(self.allocator, expr);
+        return i;
+    }
+
+    fn addGlobalDecl(self: *Parser, decl: Ast.GlobalDecl) std.mem.Allocator.Error!Ast.Index(Ast.GlobalDecl) {
+        const i = self.ast.globals.items.len;
+        try self.ast.globals.append(self.allocator, decl);
+        return i;
+    }
 };
 
+// TODO
+pub fn createNumber(str: []const u8) !Ast.Number {
+    return .{
+        .abstract_int = try std.fmt.parseInt(
+            i64,
+            str,
+            10,
+        ),
+    };
+}
+
 test {
-    const s =
-        \\type t1 = mat2x3<gg>;
-        \\var data = g;
-        \\sad
+    const str =
+        \\type t1 = array<i32, vec3(1, 2, 3)>;
     ;
-    var p = parse(std.testing.allocator, s, .{}) catch return;
+    var p = parse(std.testing.allocator, str, .{}) catch return;
     defer p.deinit(std.testing.allocator);
-    std.debug.print("\n\n{s}\n{}\n\n", .{
-        p.globals.items[0].kind.type_alias.name,
-        p.globals.items[0].kind.type_alias.type,
-    });
+
+    const t1 = p.globals.items[0].type_alias;
+    const array_i32 = t1.type.array;
+    const array_i32_base = p.types.items[array_i32.base];
+    try std.testing.expectEqual(Ast.Type{ .scalar = .{ .kind = .int, .width = 4 } }, array_i32_base);
+
+    const vec3_expr = p.expressions.items[array_i32.size.constant].construct;
+    const vec3_comps = p.expressions_extra.items[vec3_expr.components.start..vec3_expr.components.end];
+    try std.testing.expectEqual(
+        Ast.ConstructorType{ .partial_vector = .{ .size = .tri } },
+        vec3_expr.type,
+    );
+    try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);
+    try std.testing.expectEqual(
+        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 1 } } },
+        p.expressions.items[vec3_comps[0]],
+    );
+    try std.testing.expectEqual(
+        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 2 } } },
+        p.expressions.items[vec3_comps[1]],
+    );
+    try std.testing.expectEqual(
+        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 3 } } },
+        p.expressions.items[vec3_comps[2]],
+    );
 }

@@ -1,1 +1,1 @@
-type t1 = array<mat2x3<bool>>;
+type t1 = array<i32, vec3(1, 2, 3)>;

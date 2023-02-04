@@ -1,1 +1,1 @@
-type t1 = array<i32, vec3(1, 2, 3)>;
+type t1 = vec3;

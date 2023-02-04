@@ -408,6 +408,16 @@ pub const Tag = enum {
         };
     }
 
+    pub fn isLiteral(self: Tag) bool {
+        return switch (self) {
+            .number,
+            .keyword_true,
+            .keyword_false,
+            => true,
+            else => false,
+        };
+    }
+
     pub fn isScalarType(self: Tag) bool {
         return switch (self) {
             .keyword_i32,

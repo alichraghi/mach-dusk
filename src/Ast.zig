@@ -3,15 +3,15 @@ const Token = @import("Token.zig");
 
 const Ast = @This();
 
-/// Entry of the parse result.
-globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
+/// Entry of the parse result
+globals: std.MultiArrayList(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
-expressions: std.ArrayListUnmanaged(Expression) = .{},
+expressions: std.MultiArrayList(Expression) = .{},
 /// Contains additional information that an Expression in `expressions` may need
 /// e.g. list of arguments expressions in `Expression.construct.components`
 expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
-types: std.ArrayListUnmanaged(Type) = .{},
+types: std.MultiArrayList(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.globals.deinit(allocator);
@@ -21,21 +21,22 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
 }
 
 pub fn Index(comptime _: type) type {
-    return usize;
+    return u32;
 }
 
 pub fn Range(comptime _: type) type {
     return struct {
-        start: usize,
-        end: usize,
+        start: u32,
+        end: u32,
     };
 }
 
 pub const GlobalDecl = union(enum) {
-    variable: GlobalVariable,
-    function: Function,
-    constant: Const,
-    structure: Struct,
+    // Workaround: https://github.com/ziglang/zig/issues/12781
+    // variable: GlobalVariable,
+    // function: Function,
+    // constant: Const,
+    // structure: Struct,
     type_alias: TypeAlias,
 };
 
@@ -49,33 +50,7 @@ pub const Struct = struct {};
 
 pub const Expression = union(enum) {
     literal: Literal,
-    construct: struct {
-        type: union(enum) {
-            /// f32(1.0)
-            scalar: ScalarType,
-            /// vec3(1.0)
-            partial_vector: struct {
-                size: VectorType.Size,
-            },
-            /// vec3<f32>(1.0)
-            vector: VectorType,
-            /// mat2x2(1,2,3,4)
-            partial_matrix: struct {
-                rows: VectorType.Size,
-                columns: VectorType.Size,
-            },
-            /// mat2x2<f32>(1,2,3,4)
-            matrix: MatrixType,
-            /// array(1, 2, 3)
-            partial_array,
-            /// array<i32>(1, 2, 3)
-            array: ArrayType,
-            /// type my_vec = vec3<f32>;
-            /// my_vec(1.0)
-            user: []const u8,
-        },
-        components: Range(Index(Expression)),
-    },
+    construct: ConstructExpr,
     unary_operator: struct {
         op: UnaryOperator,
         expr: Index(Expression),
@@ -104,6 +79,29 @@ pub const Expression = union(enum) {
         to: Type,
         type_name: []const u8,
     },
+};
+
+pub const ConstructExpr = struct {
+    type: union(enum) {
+        /// f32(1.0)
+        scalar: ScalarType,
+        /// vec3(1.0)
+        partial_vector: VectorType.Prefix,
+        /// vec3<f32>(1.0)
+        vector: VectorType,
+        /// mat2x2(1,2,3,4)
+        partial_matrix: MatrixType.Prefix,
+        /// mat2x2<f32>(1,2,3,4)
+        matrix: MatrixType,
+        /// array(1, 2, 3)
+        partial_array,
+        /// array<i32>(1, 2, 3)
+        array: ArrayType,
+        /// type my_vec = vec3<f32>;
+        /// my_vec(1.0)
+        user: []const u8,
+    },
+    components: Range(Index(Expression)),
 };
 
 pub const Literal = union(enum) {
@@ -207,6 +205,7 @@ pub const SamplerType = struct {
 };
 
 pub const VectorType = struct {
+    pub const Prefix = Size;
     pub const Size = enum {
         bi,
         tri,
@@ -218,6 +217,11 @@ pub const VectorType = struct {
 };
 
 pub const MatrixType = struct {
+    pub const Prefix = struct {
+        rows: VectorType.Size,
+        columns: VectorType.Size,
+    };
+
     rows: VectorType.Size,
     columns: VectorType.Size,
     element_type: ScalarType,

@@ -547,7 +547,7 @@ const Parser = struct {
         }
 
         _ = try self.expectToken(.less_than);
-        const elem_type = @intCast(u32, self.ast.types.len);
+        const elem_type = @intCast(u32, self.ast.types.items.len);
         try self.ast.types.append(self.allocator, try self.parseType());
 
         if (self.eatToken(.comma)) |_| {
@@ -591,13 +591,13 @@ const Parser = struct {
     }
 
     fn addExpr(self: *Parser, expr: Ast.Expression) std.mem.Allocator.Error!Ast.Index(Ast.Expression) {
-        const i = @intCast(u32, self.ast.expressions.len);
+        const i = @intCast(u32, self.ast.expressions.items.len);
         try self.ast.expressions.append(self.allocator, expr);
         return i;
     }
 
     fn addGlobalDecl(self: *Parser, decl: Ast.GlobalDecl) std.mem.Allocator.Error!Ast.Index(Ast.GlobalDecl) {
-        const i = @intCast(u32, self.ast.globals.len);
+        const i = @intCast(u32, self.ast.globals.items.len);
         try self.ast.globals.append(self.allocator, decl);
         return i;
     }
@@ -630,8 +630,8 @@ test {
 test {
     const t = std.time.microTimestamp();
     const str =
-        \\type t2 = mat2x3<f32>;
-    ** 200;
+        \\type t1 = array<i32, vec3(1, 2, 3)>;
+    ** 1000000;
     var p = parse(std.heap.c_allocator, str, .{}) catch return;
     defer p.deinit(std.heap.c_allocator);
 
@@ -639,24 +639,24 @@ test {
         @intToFloat(f64, std.time.microTimestamp() - t) / std.time.us_per_ms,
     });
 
-    // const t1 = p.globals.items[0].type_alias;
-    // const array_i32 = t1.type.array;
-    // const array_i32_elem_type = p.types.items[array_i32.element_type];
-    // try std.testing.expectEqual(Ast.Type{ .scalar = .i32 }, array_i32_elem_type);
+    const t1 = p.globals.items[0].type_alias;
+    const array_i32 = t1.type.array;
+    const array_i32_elem_type = p.types.items[array_i32.element_type];
+    try std.testing.expectEqual(Ast.Type{ .scalar = .i32 }, array_i32_elem_type);
 
-    // const vec3_expr = p.expressions.items[array_i32.size.static].construct;
-    // const vec3_comps = p.expressions_extra.items[vec3_expr.components.start..vec3_expr.components.end];
-    // try std.testing.expectEqual(
-    //     @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .partial_vector = .tri }),
-    //     vec3_expr.type,
-    // );
-    // try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);
-    // try std.testing.expectEqual(
-    //     Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 2 } } },
-    //     p.expressions.items[vec3_comps[1]],
-    // );
-    // try std.testing.expectEqual(
-    //     Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 3 } } },
-    //     p.expressions.items[vec3_comps[2]],
-    // );
+    const vec3_expr = p.expressions.items[array_i32.size.static].construct;
+    const vec3_comps = p.expressions_extra.items[vec3_expr.components.start..vec3_expr.components.end];
+    try std.testing.expectEqual(
+        @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .partial_vector = .tri }),
+        vec3_expr.type,
+    );
+    try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);
+    try std.testing.expectEqual(
+        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 2 } } },
+        p.expressions.items[vec3_comps[1]],
+    );
+    try std.testing.expectEqual(
+        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 3 } } },
+        p.expressions.items[vec3_comps[2]],
+    );
 }

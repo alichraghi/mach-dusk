@@ -3,15 +3,16 @@ const Token = @import("Token.zig");
 
 const Ast = @This();
 
+/// TODO: make these MultiArrayList
 /// Entry of the parse result
-globals: std.MultiArrayList(GlobalDecl) = .{},
+globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
-expressions: std.MultiArrayList(Expression) = .{},
+expressions: std.ArrayListUnmanaged(Expression) = .{},
 /// Contains additional information that an Expression in `expressions` may need
 /// e.g. list of arguments expressions in `Expression.construct.components`
 expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
-types: std.MultiArrayList(Type) = .{},
+types: std.ArrayListUnmanaged(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.globals.deinit(allocator);

@@ -3,6 +3,8 @@ const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 
+const max_call_args = 64;
+
 pub fn parse(
     allocator: std.mem.Allocator,
     source: [:0]const u8,
@@ -19,9 +21,36 @@ pub fn parse(
         .errors = .{},
         .ast = .{},
     };
-    try parser.parseRoot();
+
+    const estimated_tokens = parser.source.len / 2; // 2:1 source to tokens
+    const estimated_globals = estimated_tokens / 100; // 100:1 tokens to globals
+    const estimated_expressions = estimated_tokens / 10; // 10:1 tokens to globals
+    try parser.ast.globals.ensureTotalCapacity(allocator, estimated_globals);
+    try parser.ast.expressions.ensureTotalCapacity(allocator, estimated_expressions);
+
+    while (true) {
+        const token = parser.current_token;
+        switch (token.tag) {
+            .keyword_type => {
+                const res = parser.parseTypeAlias() catch |err| switch (err) {
+                    error.Parsing => {
+                        while (parser.nextToken().tag != .semicolon) {}
+                        continue;
+                    },
+                    else => return err,
+                };
+                _ = try parser.addGlobalDecl(.{ .type_alias = res });
+            },
+            .eof => break,
+            else => {},
+        }
+    }
+
     if (parser.errors.items.len > 0) {
-        defer parser.deinit();
+        defer {
+            parser.errors.deinit(allocator);
+            parser.ast.deinit(allocator);
+        }
         if (options.emit_errors) try parser.emitErrors();
         return error.Parsing;
     }
@@ -143,7 +172,7 @@ const Parser = struct {
                     });
                 },
                 .exceeded_max_args => {
-                    try bw_writer.print("call arguments exceeded maximum number (256)", .{});
+                    try bw_writer.print("exceeded maximum call arguments number ({})", .{max_call_args});
                 },
             }
             try bw_writer.writeByte('\n');
@@ -165,48 +194,16 @@ const Parser = struct {
         try bw.flush();
     }
 
-    pub fn deinit(self: *Parser) void {
-        self.errors.deinit(self.allocator);
-        self.ast.deinit(self.allocator);
-    }
-
-    pub fn parseRoot(self: *Parser) !void {
-        const estimated_tokens = self.source.len / 2; // 2:1 source to tokens
-        const estimated_globals = estimated_tokens / 100; // 100:1 tokens to globals
-        const estimated_expressions = estimated_tokens / 10; // 10:1 tokens to globals
-        try self.ast.globals.ensureTotalCapacity(self.allocator, estimated_globals);
-        try self.ast.expressions.ensureTotalCapacity(self.allocator, estimated_expressions);
-        try self.ast.expressions_extra.ensureTotalCapacity(self.allocator, estimated_expressions);
-
-        while (true) {
-            const token = self.current_token;
-            switch (token.tag) {
-                .keyword_type => {
-                    const res = self.parseTypeAlias() catch |err| switch (err) {
-                        error.Parsing => {
-                            while (self.nextToken().tag != .semicolon) {}
-                            continue;
-                        },
-                        else => return err,
-                    };
-                    _ = try self.addGlobalDecl(.{ .type_alias = res });
-                },
-                .eof => break,
-                else => {},
-            }
-        }
-    }
-
     /// TODO
-    fn parseExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+    fn parseExpr(self: *Parser) !Ast.Expression {
         const token = self.current_token;
         if (token.tag.isLiteral()) {
-            return self.addExpr(.{ .literal = try self.parseLiteralExpr() });
+            return .{ .literal = try self.parseLiteralExpr() };
         } else if (token.tag.isScalarType() or
             token.tag.isVectorType() or
             token.tag.isMatrixType())
         {
-            return self.addExpr(.{ .construct = try self.parseConstructExpr() });
+            return .{ .construct = try self.parseConstructExpr() };
         }
 
         try self.addError(.{
@@ -299,15 +296,18 @@ const Parser = struct {
     }
 
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
-    fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Index(Ast.Expression)) {
-        const l_paren_token = try self.expectToken(.paren_left);
+    fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Expression) {
+        _ = try self.expectToken(.paren_left);
+        if (self.current_token.tag == .paren_right) {
+            _ = self.nextToken();
+            return undefined;
+        }
 
-        var args = std.BoundedArray(Ast.Index(Ast.Expression), 256).init(0) catch unreachable;
-
+        var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
         while (true) {
             args.append(try self.parseExpr()) catch {
                 try self.addError(.{
-                    .token = l_paren_token,
+                    .token = self.current_token,
                     .tag = .{ .exceeded_max_args = {} },
                 });
                 return error.Parsing;
@@ -326,10 +326,10 @@ const Parser = struct {
             }
         }
 
-        try self.ast.expressions_extra.appendSlice(self.allocator, args.slice());
+        try self.ast.expressions.appendSlice(self.allocator, args.slice());
         return .{
-            .start = @intCast(u32, self.ast.expressions_extra.items.len - args.len),
-            .end = @intCast(u32, self.ast.expressions_extra.items.len),
+            .start = @intCast(u32, self.ast.expressions.items.len - args.len),
+            .end = @intCast(u32, self.ast.expressions.items.len),
         };
     }
 
@@ -551,7 +551,7 @@ const Parser = struct {
         try self.ast.types.append(self.allocator, try self.parseType());
 
         if (self.eatToken(.comma)) |_| {
-            const size = try self.parseExpr();
+            const size = try self.addExpr(try self.parseExpr());
             _ = try self.expectToken(.greater_than);
             return .{ .element_type = elem_type, .size = .{ .static = size } };
         }
@@ -610,24 +610,24 @@ pub fn createNumber(str: []const u8) !Ast.Number {
     };
 }
 
-test {
-    // const t2 = std.time.microTimestamp();
-    // const str2 =
-    //     \\const t1 = @TypeOf(i32);
-    // ** 200;
-    // var p2 = std.zig.parse(std.heap.c_allocator, str2) catch return;
-    // defer p2.deinit(std.heap.c_allocator);
+// test {
+//     const t2 = std.time.microTimestamp();
+//     const str2 =
+//         \\const t1 = @TypeOf(i32, @TypeOf(1, 2, 3));
+//     ** 1000000;
+//     var p2 = std.zig.parse(std.heap.c_allocator, str2) catch return;
+//     defer p2.deinit(std.heap.c_allocator);
 
-    // std.debug.print("\ntook: {d}ms\n", .{
-    //     @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
-    // });
-}
+//     std.debug.print("\ntook: {d}ms\n", .{
+//         @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
+//     });
+// }
 
 test {
     const t = std.time.microTimestamp();
     const str =
         \\type t1 = array<i32, vec3(1, 2, 3)>;
-    ** 1000000;
+    ** 1;
     var p = parse(std.heap.c_allocator, str, .{}) catch return;
     defer p.deinit(std.heap.c_allocator);
 
@@ -641,7 +641,7 @@ test {
     try std.testing.expectEqual(Ast.Type{ .scalar = .i32 }, array_i32_elem_type);
 
     const vec3_expr = p.expressions.items[array_i32.size.static].construct;
-    const vec3_comps = p.expressions_extra.items[vec3_expr.components.start..vec3_expr.components.end];
+    const vec3_comps = p.expressions.items[vec3_expr.components.start..vec3_expr.components.end];
     try std.testing.expectEqual(
         @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .partial_vector = .tri }),
         vec3_expr.type,
@@ -649,10 +649,10 @@ test {
     try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);
     try std.testing.expectEqual(
         Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 2 } } },
-        p.expressions.items[vec3_comps[1]],
+        vec3_comps[1],
     );
     try std.testing.expectEqual(
         Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 3 } } },
-        p.expressions.items[vec3_comps[2]],
+        vec3_comps[2],
     );
 }

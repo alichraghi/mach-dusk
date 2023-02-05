@@ -8,16 +8,12 @@ const Ast = @This();
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
-/// Contains additional information that an Expression in `expressions` may need
-/// e.g. list of arguments expressions in `Expression.construct.components`
-expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.globals.deinit(allocator);
     self.expressions.deinit(allocator);
-    self.expressions_extra.deinit(allocator);
     self.types.deinit(allocator);
 }
 
@@ -65,7 +61,7 @@ pub const Expression = union(enum) {
     },
     call: struct {
         function: []const u8,
-        arguments: Range(Index(Expression)),
+        arguments: Range(Expression),
     },
     index: struct {
         base: Index(Expression),
@@ -102,7 +98,7 @@ pub const ConstructExpr = struct {
         /// my_vec(1.0)
         user: []const u8,
     },
-    components: Range(Index(Expression)),
+    components: Range(Expression),
 };
 
 pub const Literal = union(enum) {

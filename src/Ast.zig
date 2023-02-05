@@ -211,6 +211,14 @@ pub const VectorType = struct {
         bi,
         tri,
         quad,
+
+        pub fn len(self: Size) u5 {
+            return switch (self) {
+                .bi => 2,
+                .tri => 3,
+                .quad => 4,
+            };
+        }
     };
 
     size: Size,

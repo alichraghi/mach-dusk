@@ -9,19 +9,13 @@ pub fn parse(
     options: struct { emit_errors: bool = true },
 ) !Ast {
     var tokenizer = Tokenizer.init(source);
-    var tokens = std.ArrayList(Token).init(allocator);
-    defer tokens.deinit();
-    while (true) {
-        const tok = tokenizer.next();
-        try tokens.append(tok);
-        if (tok.tag == .eof) break;
-    }
+    var first_tok = tokenizer.next();
 
     var parser = Parser{
         .allocator = allocator,
         .source = source,
-        .tokens = tokens.items,
-        .tok_i = 0,
+        .tokenizer = tokenizer,
+        .current_token = first_tok,
         .errors = .{},
         .ast = .{},
     };
@@ -38,8 +32,8 @@ pub fn parse(
 const Parser = struct {
     allocator: std.mem.Allocator,
     source: [:0]const u8,
-    tokens: []const Token,
-    tok_i: u32,
+    tokenizer: Tokenizer,
+    current_token: Token,
     errors: std.ArrayListUnmanaged(Error),
     ast: Ast,
 
@@ -62,6 +56,7 @@ const Parser = struct {
             expected_matrix_type,
             expected_atomic_type,
             expected_array_type,
+            exceeded_max_args,
         };
     };
 
@@ -147,6 +142,9 @@ const Parser = struct {
                         err.token.tag.symbol(),
                     });
                 },
+                .exceeded_max_args => {
+                    try bw_writer.print("call arguments exceeded maximum number (256)", .{});
+                },
             }
             try bw_writer.writeByte('\n');
 
@@ -172,21 +170,18 @@ const Parser = struct {
         self.ast.deinit(self.allocator);
     }
 
-    pub fn reset(self: *Parser) void {
-        self.tok_i = 0;
-        self.errors.clearAndFree(self.allocator);
-        self.ast.deinit(self.allocator);
-        self.ast = .{};
-    }
-
     pub fn parseRoot(self: *Parser) !void {
-        self.reset();
+        const estimated_tokens = self.source.len / 2; // 2:1 source to tokens
+        const estimated_globals = estimated_tokens / 100; // 100:1 tokens to globals
+        const estimated_expressions = estimated_tokens / 10; // 10:1 tokens to globals
+        try self.ast.globals.ensureTotalCapacity(self.allocator, estimated_globals);
+        try self.ast.expressions.ensureTotalCapacity(self.allocator, estimated_expressions);
+        try self.ast.expressions_extra.ensureTotalCapacity(self.allocator, estimated_expressions);
 
         while (true) {
-            const token = self.currentToken();
+            const token = self.current_token;
             switch (token.tag) {
                 .keyword_type => {
-                    try self.ast.expressions.ensureUnusedCapacity(self.allocator, 4);
                     const res = self.parseTypeAlias() catch |err| switch (err) {
                         error.Parsing => {
                             while (self.nextToken().tag != .semicolon) {}
@@ -204,7 +199,7 @@ const Parser = struct {
 
     /// TODO
     fn parseExpr(self: *Parser) !Ast.Index(Ast.Expression) {
-        const token = self.currentToken();
+        const token = self.current_token;
         if (token.tag.isLiteral()) {
             return self.addExpr(.{ .literal = try self.parseLiteralExpr() });
         } else if (token.tag.isScalarType() or
@@ -244,7 +239,7 @@ const Parser = struct {
     ///                 / ( MatrixTypePrefix (LESS_THAN KEYWORD_f32 / KEYWORD_f32 GREATER_THAN)? )
     ///                )
     fn parseConstructExpr(self: *Parser) !Ast.ConstructExpr {
-        const token = self.currentToken();
+        const token = self.current_token;
         if (token.tag.isScalarType()) {
             const scalar_type = try self.parseScalarType();
             const args = try self.parseCallArguments();
@@ -305,13 +300,18 @@ const Parser = struct {
 
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
     fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Index(Ast.Expression)) {
-        _ = try self.expectToken(.paren_left);
+        const l_paren_token = try self.expectToken(.paren_left);
 
-        var args = std.ArrayList(Ast.Index(Ast.Expression)).init(self.allocator);
-        defer args.deinit();
+        var args = std.BoundedArray(Ast.Index(Ast.Expression), 256).init(0) catch unreachable;
 
         while (true) {
-            try args.append(try self.parseExpr());
+            args.append(try self.parseExpr()) catch {
+                try self.addError(.{
+                    .token = l_paren_token,
+                    .tag = .{ .exceeded_max_args = {} },
+                });
+                return error.Parsing;
+            };
             const token = self.nextToken();
             switch (token.tag) {
                 .comma => {},
@@ -326,9 +326,9 @@ const Parser = struct {
             }
         }
 
-        try self.ast.expressions_extra.appendSlice(self.allocator, args.items);
+        try self.ast.expressions_extra.appendSlice(self.allocator, args.slice());
         return .{
-            .start = @intCast(u32, self.ast.expressions_extra.items.len - args.items.len),
+            .start = @intCast(u32, self.ast.expressions_extra.items.len - args.len),
             .end = @intCast(u32, self.ast.expressions_extra.items.len),
         };
     }
@@ -351,7 +351,7 @@ const Parser = struct {
     ///      / ArrayType
     ///      / IDENTIFIER
     fn parseType(self: *Parser) !Ast.Type {
-        const token = self.currentToken();
+        const token = self.current_token;
         if (token.tag.isScalarType()) {
             return .{ .scalar = try self.parseScalarType() };
         } else if (token.tag.isSamplerType()) {
@@ -561,11 +561,11 @@ const Parser = struct {
     }
 
     fn expectToken(self: *Parser, tag: Token.Tag) !Token {
-        if (self.currentToken().tag == tag) {
+        if (self.current_token.tag == tag) {
             return self.nextToken();
         } else {
             try self.addError(.{
-                .token = self.currentToken(),
+                .token = self.current_token,
                 .tag = .{ .expected_token = tag },
             });
             return error.Parsing;
@@ -573,16 +573,12 @@ const Parser = struct {
     }
 
     fn eatToken(self: *Parser, tag: Token.Tag) ?Token {
-        return if (self.currentToken().tag == tag) self.nextToken() else null;
-    }
-
-    fn currentToken(self: *Parser) Token {
-        return self.tokens[self.tok_i];
+        return if (self.current_token.tag == tag) self.nextToken() else null;
     }
 
     fn nextToken(self: *Parser) Token {
-        const current = self.currentToken();
-        self.tok_i += 1;
+        const current = self.current_token;
+        self.current_token = self.tokenizer.next();
         return current;
     }
 

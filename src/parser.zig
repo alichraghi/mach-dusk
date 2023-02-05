@@ -71,13 +71,12 @@ const Parser = struct {
         token: Token,
         notes: []const []const u8 = &.{},
 
-        // TODO: sort
         pub const Tag = union(enum) {
             expected_token: Token.Tag,
             expected_expr,
             expected_literal_expr,
             expected_construct_expr,
-            expected_type_decl,
+            expected_type,
             expected_scalar_type,
             expected_float_type,
             expected_sampler_type,
@@ -131,7 +130,7 @@ const Parser = struct {
                         err.token.tag.symbol(),
                     });
                 },
-                .expected_type_decl => {
+                .expected_type => {
                     try bw_writer.print("expected type declaration, but found '{s}'", .{
                         err.token.tag.symbol(),
                     });
@@ -219,7 +218,7 @@ const Parser = struct {
         return switch (token.tag) {
             .keyword_true => .{ .bool = true },
             .keyword_false => .{ .bool = false },
-            .number => .{ .number = createNumber(token.loc.asStr(self.source)) catch unreachable }, // TODO
+            .number => .{ .number = parseNumberLiteral(token.loc.asStr(self.source)) catch unreachable },
             else => {
                 try self.addError(.{
                     .token = token,
@@ -228,6 +227,15 @@ const Parser = struct {
                 return error.Parsing;
             },
         };
+    }
+
+    // TODO
+    pub fn parseNumberLiteral(str: []const u8) !Ast.Number {
+        return .{ .abstract_int = try std.fmt.parseInt(
+            i64,
+            str,
+            10,
+        ) };
     }
 
     /// ConstructExpr <-
@@ -296,11 +304,11 @@ const Parser = struct {
     }
 
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
-    fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!Ast.Range(Ast.Expression) {
+    fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!?Ast.Range(Ast.Expression) {
         _ = try self.expectToken(.paren_left);
         if (self.current_token.tag == .paren_right) {
             _ = self.nextToken();
-            return undefined;
+            return null;
         }
 
         var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
@@ -371,7 +379,7 @@ const Parser = struct {
 
         try self.addError(.{
             .token = token,
-            .tag = .{ .expected_type_decl = {} },
+            .tag = .{ .expected_type = {} },
         });
         return error.Parsing;
     }
@@ -599,17 +607,6 @@ const Parser = struct {
     }
 };
 
-// TODO
-pub fn createNumber(str: []const u8) !Ast.Number {
-    return .{
-        .abstract_int = try std.fmt.parseInt(
-            i64,
-            str,
-            10,
-        ),
-    };
-}
-
 // test {
 //     const t2 = std.time.microTimestamp();
 //     const str2 =
@@ -641,7 +638,7 @@ test {
     try std.testing.expectEqual(Ast.Type{ .scalar = .i32 }, array_i32_elem_type);
 
     const vec3_expr = p.expressions.items[array_i32.size.static].construct;
-    const vec3_comps = p.expressions.items[vec3_expr.components.start..vec3_expr.components.end];
+    const vec3_comps = p.expressions.items[vec3_expr.components.?.start..vec3_expr.components.?.end];
     try std.testing.expectEqual(
         @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .partial_vector = .tri }),
         vec3_expr.type,

@@ -98,7 +98,7 @@ pub const ConstructExpr = struct {
         /// my_vec(1.0)
         user: []const u8,
     },
-    components: Range(Expression),
+    components: ?Range(Expression),
 };
 
 pub const Literal = union(enum) {

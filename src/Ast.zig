@@ -8,8 +8,8 @@ const Ast = @This();
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
-/// Contains Type's that an ArrayType `element_type` field need
-types: std.ArrayListUnmanaged(Type) = .{},
+/// Contains PlainType's that an ArrayType `element_type` field need
+types: std.ArrayListUnmanaged(PlainType) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.globals.deinit(allocator);
@@ -29,11 +29,10 @@ pub fn Range(comptime _: type) type {
 }
 
 pub const GlobalDecl = union(enum) {
-    // Workaround: https://github.com/ziglang/zig/issues/12781
-    // variable: GlobalVariable,
-    // function: Function,
-    // constant: Const,
-    // structure: Struct,
+    variable: GlobalVariable,
+    function: Function,
+    constant: Const,
+    strct: Struct,
     type_alias: TypeAlias,
 };
 
@@ -45,37 +44,52 @@ pub const Const = struct {};
 
 pub const Struct = struct {};
 
+pub const TypeAlias = struct {
+    name: []const u8,
+    type: PlainType,
+};
+
 pub const Expression = union(enum) {
     literal: Literal,
     construct: ConstructExpr,
-    unary_operator: struct {
-        op: UnaryOperator,
-        expr: Index(Expression),
-    },
+    unary_operator: UnaryOperator,
     addr_of: Index(Expression),
     deref: Index(Expression),
-    binary: struct {
-        op: BinaryOperator,
-        left: Index(Expression),
-        right: Index(Expression),
-    },
-    call: struct {
-        function: []const u8,
-        arguments: Range(Expression),
-    },
-    index: struct {
+    binary: BinaryOperator,
+    call: FunctionCall,
+    index: struct { // TODO
         base: Index(Expression),
         index: Index(Expression),
     },
-    member: struct {
+    member: struct { // TODO
         base: Index(Expression),
         field: []const u8,
     },
-    bitcast: struct {
+    bitcast: struct { // TODO
         expr: Index(Expression),
-        to: Type,
+        to: PlainType,
         type_name: []const u8,
     },
+};
+
+pub const Literal = union(enum) {
+    number: Number,
+    bool: bool,
+
+    pub const Number = union(enum) {
+        /// Abstract Int (-2^63 ≤ i < 2^63)
+        abstract_int: i64,
+        /// Abstract Float (IEEE-754 binary64)
+        abstract_float: f64,
+        /// i32
+        i32: i32,
+        /// u32
+        u32: u32,
+        /// f32
+        f32: f32,
+        /// f16
+        f16: f32,
+    };
 };
 
 pub const ConstructExpr = struct {
@@ -101,82 +115,74 @@ pub const ConstructExpr = struct {
     components: ?Range(Expression),
 };
 
-pub const Literal = union(enum) {
-    number: Number,
-    bool: bool,
+pub const FunctionCall = struct {
+    function: []const u8,
+    arguments: Range(Expression),
 };
 
-pub const Number = union(enum) {
-    /// Abstract Int (-2^63 ≤ i < 2^63)
-    abstract_int: i64,
-    /// Abstract Float (IEEE-754 binary64)
-    abstract_float: f64,
-    /// i32
-    i32: i32,
-    /// u32
-    u32: u32,
-    /// f32
-    f32: f32,
-    /// f16
-    f16: f32,
+pub const UnaryOperator = struct {
+    pub const Kind = enum {
+        negate,
+        not,
+    };
+
+    op: Kind,
+    expr: Index(Expression),
 };
 
-pub const UnaryOperator = enum {
-    negate,
-    not,
+pub const BinaryOperator = struct {
+    pub const Kind = enum {
+        /// +
+        add,
+        /// -
+        subtract,
+        /// *
+        multiply,
+        /// /
+        divide,
+        /// %
+        modulo,
+        /// ==
+        equal,
+        /// !=
+        not_equal,
+        /// <
+        less,
+        /// <=
+        less_equal,
+        /// >
+        greater,
+        /// >=
+        greater_equal,
+        /// &
+        @"and",
+        /// ^
+        exclusive_or,
+        /// |
+        inclusive_or,
+        /// &&
+        logical_and,
+        /// ||
+        logical_or,
+        /// <<
+        shift_left,
+        /// >>
+        shift_right,
+    };
+
+    op: Kind,
+    left: Index(Expression),
+    right: Index(Expression),
 };
 
-pub const BinaryOperator = enum {
-    /// +
-    add,
-    /// -
-    subtract,
-    /// *
-    multiply,
-    /// /
-    divide,
-    /// %
-    modulo,
-    /// ==
-    equal,
-    /// !=
-    not_equal,
-    /// <
-    less,
-    /// <=
-    less_equal,
-    /// >
-    greater,
-    /// >=
-    greater_equal,
-    /// &
-    @"and",
-    /// ^
-    exclusive_or,
-    /// |
-    inclusive_or,
-    /// &&
-    logical_and,
-    /// ||
-    logical_or,
-    /// <<
-    shift_left,
-    /// >>
-    shift_right,
-};
-
-pub const TypeAlias = struct {
-    name: []const u8,
-    type: Type,
-};
-
-pub const Type = union(enum) {
+pub const PlainType = union(enum) {
     scalar: ScalarType,
     vector: VectorType,
     matrix: MatrixType,
     sampler: SamplerType,
     atomic: AtomicType,
     array: ArrayType,
+    strct: StructType,
     /// A user-defined type, like a struct or a type alias.
     user: []const u8,
 };
@@ -243,5 +249,7 @@ pub const ArrayType = struct {
     };
 
     size: Size,
-    element_type: Index(Type),
+    element_type: Index(PlainType),
 };
+
+pub const StructType = struct {};

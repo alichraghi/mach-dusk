@@ -11,22 +11,23 @@ pub fn parse(
     options: struct { emit_errors: bool = true },
 ) !Ast {
     var tokenizer = Tokenizer.init(source);
-    var first_tok = tokenizer.next();
+    var first_token = tokenizer.next();
 
     var parser = Parser{
         .allocator = allocator,
         .source = source,
         .tokenizer = tokenizer,
-        .current_token = first_tok,
+        .current_token = first_token,
         .errors = .{},
         .ast = .{},
     };
+    errdefer {
+        parser.errors.deinit(allocator);
+        parser.ast.deinit(allocator);
+    }
 
-    const estimated_tokens = parser.source.len / 2; // 2:1 source to tokens
-    const estimated_globals = estimated_tokens / 100; // 100:1 tokens to globals
-    const estimated_expressions = estimated_tokens / 10; // 10:1 tokens to globals
-    try parser.ast.globals.ensureTotalCapacity(allocator, estimated_globals);
-    try parser.ast.expressions.ensureTotalCapacity(allocator, estimated_expressions);
+    try parser.ast.globals.ensureTotalCapacityPrecise(allocator, source.len / 50); // 1:50 source to globals
+    try parser.ast.expressions.ensureTotalCapacityPrecise(allocator, source.len / 5); // 1:5 source to expressions
 
     while (true) {
         const token = parser.current_token;
@@ -42,15 +43,13 @@ pub fn parse(
                 _ = try parser.addGlobalDecl(.{ .type_alias = res });
             },
             .eof => break,
-            else => {},
+            else => {
+                std.debug.print("Unsupported global\n", .{});
+            },
         }
     }
 
     if (parser.errors.items.len > 0) {
-        defer {
-            parser.errors.deinit(allocator);
-            parser.ast.deinit(allocator);
-        }
         if (options.emit_errors) try parser.emitErrors();
         return error.Parsing;
     }
@@ -230,7 +229,7 @@ const Parser = struct {
     }
 
     // TODO
-    pub fn parseNumberLiteral(str: []const u8) !Ast.Number {
+    pub fn parseNumberLiteral(str: []const u8) !Ast.Literal.Number {
         return .{ .abstract_int = try std.fmt.parseInt(
             i64,
             str,
@@ -358,7 +357,7 @@ const Parser = struct {
     ///      / AtomicType
     ///      / ArrayType
     ///      / IDENTIFIER
-    fn parseType(self: *Parser) !Ast.Type {
+    fn parseType(self: *Parser) !Ast.PlainType {
         const token = self.current_token;
         if (token.tag.isScalarType()) {
             return .{ .scalar = try self.parseScalarType() };
@@ -607,25 +606,25 @@ const Parser = struct {
     }
 };
 
-// test {
-//     const t2 = std.time.microTimestamp();
-//     const str2 =
-//         \\const t1 = @TypeOf(i32, @TypeOf(1, 2, 3));
-//     ** 1000000;
-//     var p2 = std.zig.parse(std.heap.c_allocator, str2) catch return;
-//     defer p2.deinit(std.heap.c_allocator);
+test {
+    const t2 = std.time.microTimestamp();
+    const str2 =
+        \\const t1 = @TypeOf(i32, @TypeOf(1, 2, 3));
+    ** 1;
+    var p2 = std.zig.Ast.parse(std.heap.c_allocator, str2, .zig) catch return;
+    defer p2.deinit(std.heap.c_allocator);
 
-//     std.debug.print("\ntook: {d}ms\n", .{
-//         @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
-//     });
-// }
+    std.debug.print("\ntook: {d}ms\n", .{
+        @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
+    });
+}
 
 test {
     const t = std.time.microTimestamp();
     const str =
         \\type t1 = array<i32, vec3(1, 2, 3)>;
     ** 1;
-    var p = parse(std.heap.c_allocator, str, .{}) catch return;
+    var p = try parse(std.heap.c_allocator, str, .{});
     defer p.deinit(std.heap.c_allocator);
 
     std.debug.print("\ntook: {d}ms\n", .{
@@ -635,7 +634,7 @@ test {
     const t1 = p.globals.items[0].type_alias;
     const array_i32 = t1.type.array;
     const array_i32_elem_type = p.types.items[array_i32.element_type];
-    try std.testing.expectEqual(Ast.Type{ .scalar = .i32 }, array_i32_elem_type);
+    try std.testing.expectEqual(Ast.PlainType{ .scalar = .i32 }, array_i32_elem_type);
 
     const vec3_expr = p.expressions.items[array_i32.size.static].construct;
     const vec3_comps = p.expressions.items[vec3_expr.components.?.start..vec3_expr.components.?.end];

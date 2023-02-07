@@ -17,8 +17,12 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.types.deinit(allocator);
 }
 
-pub fn Index(comptime _: type) type {
-    return u32;
+pub fn Span(comptime T: type) type {
+    return union(enum) {
+        zero,
+        one: Index(T),
+        multi: Range(T),
+    };
 }
 
 pub fn Range(comptime _: type) type {
@@ -26,6 +30,10 @@ pub fn Range(comptime _: type) type {
         start: u32,
         end: u32,
     };
+}
+
+pub fn Index(comptime _: type) type {
+    return u32;
 }
 
 pub const GlobalDecl = union(enum) {
@@ -65,11 +73,7 @@ pub const Expression = union(enum) {
         base: Index(Expression),
         field: []const u8,
     },
-    bitcast: struct { // TODO
-        expr: Index(Expression),
-        to: PlainType,
-        type_name: []const u8,
-    },
+    bitcast: BitcastExpr,
 };
 
 pub const Literal = union(enum) {
@@ -94,25 +98,25 @@ pub const Literal = union(enum) {
 
 pub const ConstructExpr = struct {
     type: union(enum) {
-        /// f32(1.0)
+        /// f32(e1,...eN), ...
         scalar: ScalarType,
-        /// vec3(1.0)
-        partial_vector: VectorType.Prefix,
-        /// vec3<f32>(1.0)
+        /// vec3<T?>(e1,...eN)
         vector: VectorType,
-        /// mat2x2(1,2,3,4)
-        partial_matrix: MatrixType.Prefix,
-        /// mat2x2<f32>(1,2,3,4)
+        /// mat2x2<T?>(e1,...eN)
         matrix: MatrixType,
-        /// array(1, 2, 3)
+        /// array(e1,...eN)
         partial_array,
-        /// array<i32>(1, 2, 3)
-        array: ArrayType,
-        /// type my_vec = vec3<f32>;
-        /// my_vec(1.0)
+        /// array<T, N?>(e1,...eN)
+        full_array: ArrayType,
         user: []const u8,
     },
-    components: ?Range(Expression),
+    components: Span(Expression),
+};
+
+pub const BitcastExpr = struct {
+    /// only i32, u32 and f32 is allowed
+    dest: ScalarType,
+    expr: Index(Expression),
 };
 
 pub const FunctionCall = struct {
@@ -207,35 +211,40 @@ pub const SamplerType = struct {
     comparison: bool,
 };
 
-pub const VectorType = struct {
-    pub const Prefix = Size;
+pub const VectorType = union(enum) {
+    partial: Partial,
+    full: Full,
+
+    pub const Full = struct {
+        size: Size,
+        element_type: ScalarType,
+    };
+
+    pub const Partial = struct {
+        size: Size,
+    };
+
     pub const Size = enum {
         bi,
         tri,
         quad,
-
-        pub fn len(self: Size) u5 {
-            return switch (self) {
-                .bi => 2,
-                .tri => 3,
-                .quad => 4,
-            };
-        }
     };
-
-    size: Size,
-    element_type: ScalarType,
 };
 
-pub const MatrixType = struct {
-    pub const Prefix = struct {
+pub const MatrixType = union(enum) {
+    partial: Partial,
+    full: Full,
+
+    pub const Full = struct {
+        rows: VectorType.Size,
+        columns: VectorType.Size,
+        element_type: ScalarType,
+    };
+
+    pub const Partial = struct {
         rows: VectorType.Size,
         columns: VectorType.Size,
     };
-
-    rows: VectorType.Size,
-    columns: VectorType.Size,
-    element_type: ScalarType,
 };
 
 pub const AtomicType = struct {

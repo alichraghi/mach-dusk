@@ -75,6 +75,7 @@ const Parser = struct {
             expected_expr,
             expected_literal_expr,
             expected_construct_expr,
+            expected_bitcast_expr,
             expected_type,
             expected_scalar_type,
             expected_float_type,
@@ -83,7 +84,9 @@ const Parser = struct {
             expected_matrix_type,
             expected_atomic_type,
             expected_array_type,
-            exceeded_max_args,
+            expected_at_least_x_args: u8,
+            exceeded_max_args: u8,
+            invalid_bitcast_dest_type,
         };
     };
 
@@ -129,6 +132,11 @@ const Parser = struct {
                         err.token.tag.symbol(),
                     });
                 },
+                .expected_bitcast_expr => {
+                    try bw_writer.print("expected bitcast expression, but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
                 .expected_type => {
                     try bw_writer.print("expected type declaration, but found '{s}'", .{
                         err.token.tag.symbol(),
@@ -169,8 +177,16 @@ const Parser = struct {
                         err.token.tag.symbol(),
                     });
                 },
-                .exceeded_max_args => {
-                    try bw_writer.print("exceeded maximum call arguments number ({})", .{max_call_args});
+                .expected_at_least_x_args => |min| {
+                    try bw_writer.print("expected at least {} args", .{min});
+                },
+                .exceeded_max_args => |max| {
+                    try bw_writer.print("exceeded maximum call arguments number ({})", .{max});
+                },
+                .invalid_bitcast_dest_type => {
+                    try bw_writer.print("invalid bitcast destination type. must be eathir ('i32', 'u32' or 'f32') but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
                 },
             }
             try bw_writer.writeByte('\n');
@@ -192,16 +208,19 @@ const Parser = struct {
         try bw.flush();
     }
 
-    /// TODO
+    /// Expression <- LiteralExpr | ConstructExpr
     fn parseExpr(self: *Parser) !Ast.Expression {
         const token = self.current_token;
         if (token.tag.isLiteral()) {
             return .{ .literal = try self.parseLiteralExpr() };
         } else if (token.tag.isScalarType() or
             token.tag.isVectorType() or
-            token.tag.isMatrixType())
+            token.tag.isMatrixType() or
+            token.tag == .keyword_array)
         {
             return .{ .construct = try self.parseConstructExpr() };
+        } else if (token.tag == .keyword_bitcast) {
+            return .{ .bitcast = try self.parseBitcastExpr() };
         }
 
         try self.addError(.{
@@ -211,7 +230,7 @@ const Parser = struct {
         return error.Parsing;
     }
 
-    /// LiteralExpr <- NUMBER / KEYWORD_true / KEYWORD_false
+    /// LiteralExpr <- Number | KEYWORD_true | KEYWORD_false
     fn parseLiteralExpr(self: *Parser) !Ast.Literal {
         const token = self.nextToken();
         return switch (token.tag) {
@@ -237,60 +256,44 @@ const Parser = struct {
         ) };
     }
 
-    /// ConstructExpr <-
-    ///                (
-    ///                   ( VectorTypePrefix (LESS_THAN ScalarType GREATER_THAN)? )
-    ///                 / ( MatrixTypePrefix (LESS_THAN KEYWORD_f32 / KEYWORD_f32 GREATER_THAN)? )
-    ///                )
+    /// ConstructExpr
+    ///              <- VectorType
+    ///               | MatrixType
+    ///               | (KEYWORD_array | ArrayType)
+    ///                 LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
     fn parseConstructExpr(self: *Parser) !Ast.ConstructExpr {
         const token = self.current_token;
         if (token.tag.isScalarType()) {
             const scalar_type = try self.parseScalarType();
-            const args = try self.parseCallArguments();
+            const args = try self.parseCallArguments(0, max_call_args);
             return .{
                 .type = .{
                     .scalar = scalar_type,
                 },
                 .components = args,
             };
-        } else if (token.tag.isVectorType()) {
-            const prefix = try self.parseVectorTypePrefix();
-
-            if (self.eatToken(.less_than)) |_| {
-                const elem_type = try self.parseScalarType();
-                _ = try self.expectToken(.greater_than);
-                const args = try self.parseCallArguments();
-                return .{
-                    .type = .{ .vector = .{ .size = prefix, .element_type = elem_type } },
-                    .components = args,
-                };
-            }
-
-            const args = try self.parseCallArguments();
-            return .{
-                .type = .{
-                    .partial_vector = prefix,
-                },
-                .components = args,
-            };
+        } else if (token.tag.isVectorType()) { // TODO max args
+            const vector_type = try self.parseVectorType(false);
+            const args = try self.parseCallArguments(0, max_call_args);
+            return .{ .type = .{ .vector = vector_type }, .components = args };
         } else if (token.tag.isMatrixType()) {
-            const prefix = try self.parseMatrixTypePrefix();
-
-            if (self.eatToken(.less_than)) |_| {
-                const elem_type = try self.parseScalarType();
-                _ = try self.expectToken(.greater_than);
-                const args = try self.parseCallArguments();
+            const matrix_type = try self.parseMatrixType(false);
+            const args = try self.parseCallArguments(0, max_call_args);
+            return .{ .type = .{ .matrix = matrix_type }, .components = args };
+        } else if (token.tag == .keyword_array) {
+            if (self.peekToken().tag == .less_than) {
+                const array_type = try self.parseArrayType();
+                const args = try self.parseCallArguments(0, max_call_args);
                 return .{
-                    .type = .{ .matrix = .{ .columns = prefix.columns, .rows = prefix.rows, .element_type = elem_type } },
+                    .type = .{ .full_array = array_type },
                     .components = args,
                 };
             }
 
-            const args = try self.parseCallArguments();
+            _ = self.nextToken();
+            const args = try self.parseCallArguments(0, max_call_args);
             return .{
-                .type = .{
-                    .partial_matrix = prefix,
-                },
+                .type = .{ .partial_array = {} },
                 .components = args,
             };
         }
@@ -302,23 +305,72 @@ const Parser = struct {
         return error.Parsing;
     }
 
+    /// BitcastExpr
+    ///              <- VectorType
+    ///               | MatrixType
+    ///               | (KEYWORD_array | ArrayType)
+    ///                 LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
+    fn parseBitcastExpr(self: *Parser) !Ast.BitcastExpr {
+        const token = self.nextToken();
+        if (token.tag == .keyword_bitcast) {
+            _ = try self.expectToken(.less_than);
+
+            const scalar_type = try self.parseScalarType();
+            switch (scalar_type) {
+                .i32, .u32, .f32 => {},
+                else => {
+                    try self.addError(.{
+                        .token = token,
+                        .tag = .{ .invalid_bitcast_dest_type = {} },
+                    });
+                    return error.Parsing;
+                },
+            }
+
+            _ = try self.expectToken(.greater_than);
+            const args = try self.parseCallArguments(1, 1);
+            return .{
+                .dest = scalar_type,
+                .expr = args.one,
+            };
+        }
+
+        try self.addError(.{
+            .token = token,
+            .tag = .{ .expected_bitcast_expr = {} },
+        });
+        return error.Parsing;
+    }
+
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
-    fn parseCallArguments(self: *Parser) error{ Parsing, OutOfMemory }!?Ast.Range(Ast.Expression) {
+    fn parseCallArguments(self: *Parser, min: u8, max: u8) error{ Parsing, OutOfMemory }!Ast.Span(Ast.Expression) {
+        std.debug.assert(max <= max_call_args);
+
         _ = try self.expectToken(.paren_left);
         if (self.current_token.tag == .paren_right) {
             _ = self.nextToken();
-            return null;
+            return .{ .zero = {} };
         }
 
         var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
         while (true) {
+            const expr_token = self.current_token;
             args.append(try self.parseExpr()) catch {
                 try self.addError(.{
-                    .token = self.current_token,
-                    .tag = .{ .exceeded_max_args = {} },
+                    .token = expr_token,
+                    .tag = .{ .exceeded_max_args = max_call_args },
                 });
                 return error.Parsing;
             };
+
+            if (args.len > max) {
+                try self.addError(.{
+                    .token = expr_token,
+                    .tag = .{ .exceeded_max_args = max },
+                });
+                return error.Parsing;
+            }
+
             const token = self.nextToken();
             switch (token.tag) {
                 .comma => {},
@@ -333,11 +385,24 @@ const Parser = struct {
             }
         }
 
-        try self.ast.expressions.appendSlice(self.allocator, args.slice());
-        return .{
-            .start = @intCast(u32, self.ast.expressions.items.len - args.len),
-            .end = @intCast(u32, self.ast.expressions.items.len),
-        };
+        if (args.len < min) {
+            try self.addError(.{
+                .token = self.current_token,
+                .tag = .{ .expected_at_least_x_args = min },
+            });
+            return error.Parsing;
+        }
+
+        if (args.len == 1) {
+            try self.ast.expressions.append(self.allocator, args.get(0));
+            return .{ .one = @intCast(u32, self.ast.expressions.items.len - 1) };
+        } else {
+            try self.ast.expressions.appendSlice(self.allocator, args.slice());
+            return .{ .multi = .{
+                .start = @intCast(u32, self.ast.expressions.items.len - args.len),
+                .end = @intCast(u32, self.ast.expressions.items.len),
+            } };
+        }
     }
 
     /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL Type
@@ -352,11 +417,11 @@ const Parser = struct {
 
     /// Type
     ///     <- ScalarType
-    ///      / VectorType
-    ///      / MatrixType
-    ///      / AtomicType
-    ///      / ArrayType
-    ///      / IDENTIFIER
+    ///      | VectorType.Full
+    ///      | MatrixType.Full
+    ///      | AtomicType
+    ///      | ArrayType
+    ///      | IDENTIFIER
     fn parseType(self: *Parser) !Ast.PlainType {
         const token = self.current_token;
         if (token.tag.isScalarType()) {
@@ -364,9 +429,9 @@ const Parser = struct {
         } else if (token.tag.isSamplerType()) {
             return .{ .sampler = try self.parseSamplerType() };
         } else if (token.tag.isVectorType()) {
-            return .{ .vector = try self.parseVectorType() };
+            return .{ .vector = try self.parseVectorType(true) };
         } else if (token.tag.isMatrixType()) {
-            return .{ .matrix = try self.parseMatrixType() };
+            return .{ .matrix = try self.parseMatrixType(true) };
         } else if (token.tag == .keyword_atomic) {
             return .{ .atomic = try self.parseAtomicType() };
         } else if (token.tag == .keyword_array) {
@@ -385,10 +450,10 @@ const Parser = struct {
 
     /// ScalarType
     ///     <- KEYWORD_i32
-    ///      / KEYWORD_u32
-    ///      / KEYWORD_f32
-    ///      / KEYWORD_f16
-    ///      / KEYWORD_bool
+    ///      | KEYWORD_u32
+    ///      | KEYWORD_f32
+    ///      | KEYWORD_f16
+    ///      | KEYWORD_bool
     fn parseScalarType(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         return switch (token.tag) {
@@ -407,7 +472,7 @@ const Parser = struct {
         };
     }
 
-    /// SamplerType <- KEYWORD_sampler / KEYWORD_comparison_sampler
+    /// SamplerType <- KEYWORD_sampler | KEYWORD_comparison_sampler
     pub fn parseSamplerType(self: *Parser) !Ast.SamplerType {
         const token = self.nextToken();
         return switch (token.tag) {
@@ -423,24 +488,16 @@ const Parser = struct {
         };
     }
 
-    /// VectorType <- VectorTypePrefix LESS_THAN ScalarType GREATER_THAN
-    pub fn parseVectorType(self: *Parser) !Ast.VectorType {
-        const prefix = try self.parseVectorTypePrefix();
-
-        _ = try self.expectToken(.less_than);
-        const elem_type = try self.parseScalarType();
-        _ = try self.expectToken(.greater_than);
-
-        return .{
-            .size = prefix,
-            .element_type = elem_type,
-        };
-    }
-
-    /// VectorTypePrefix <- KEYWORD_vec2 / KEYWORD_vec3 / KEYWORD_vec4
-    pub fn parseVectorTypePrefix(self: *Parser) !Ast.VectorType.Prefix {
+    /// VectorType <- VectorType.Full | VectorType.Partial
+    ///
+    /// VectorType.Full <- VectorType.Partial LESS_THAN ScalarType GREATER_THAN
+    ///
+    /// VectorType.Partial <- KEYWORD_vec2
+    ///                     | KEYWORD_vec3
+    ///                     | KEYWORD_vec4
+    pub fn parseVectorType(self: *Parser, strict: bool) !Ast.VectorType {
         const token = self.nextToken();
-        return switch (token.tag) {
+        const size: Ast.VectorType.Size = switch (token.tag) {
             .keyword_vec2 => .bi,
             .keyword_vec3 => .tri,
             .keyword_vec4 => .quad,
@@ -452,11 +509,58 @@ const Parser = struct {
                 return error.Parsing;
             },
         };
+
+        if (!strict and self.current_token.tag != .less_than) {
+            return .{ .partial = .{ .size = size } };
+        }
+
+        _ = try self.expectToken(.less_than);
+        const elem_type = try self.parseScalarType();
+        _ = try self.expectToken(.greater_than);
+
+        return .{ .full = .{ .size = size, .element_type = elem_type } };
     }
 
-    /// MatrixType <- MatrixTypePrefix LESS_THAN KEYWORD_f32 / KEYWORD_f16 GREATER_THAN
-    pub fn parseMatrixType(self: *Parser) !Ast.MatrixType {
-        const prefix = try self.parseMatrixTypePrefix();
+    /// MatrixType <- MatrixType.Full | MatrixType.Partial
+    ///
+    /// MatrixType.Full <- MatrixType.Partial LESS_THAN KEYWORD_f32 | KEYWORD_f16 GREATER_THAN
+    ///
+    /// MatrixType.Partial
+    ///     <- KEYWORD_mat2x2
+    ///      | KEYWORD_mat2x3
+    ///      | KEYWORD_mat2x4
+    ///      | KEYWORD_mat3x2
+    ///      | KEYWORD_mat3x3
+    ///      | KEYWORD_mat3x4
+    ///      | KEYWORD_mat4x2
+    ///      | KEYWORD_mat4x3
+    ///      | KEYWORD_mat4x4
+    pub fn parseMatrixType(self: *Parser, strict: bool) !Ast.MatrixType {
+        const token = self.nextToken();
+        if (!token.tag.isMatrixType()) {
+            try self.addError(.{
+                .token = token,
+                .tag = .{ .expected_matrix_type = {} },
+            });
+            return error.Parsing;
+        }
+
+        const columns: Ast.VectorType.Size = switch (token.tag) {
+            .keyword_mat2x2, .keyword_mat2x3, .keyword_mat2x4 => .bi,
+            .keyword_mat3x2, .keyword_mat3x3, .keyword_mat3x4 => .tri,
+            .keyword_mat4x2, .keyword_mat4x3, .keyword_mat4x4 => .quad,
+            else => unreachable,
+        };
+        const rows: Ast.VectorType.Size = switch (token.tag) {
+            .keyword_mat2x2, .keyword_mat3x2, .keyword_mat4x2 => .bi,
+            .keyword_mat2x3, .keyword_mat3x3, .keyword_mat4x3 => .tri,
+            .keyword_mat2x4, .keyword_mat3x4, .keyword_mat4x4 => .quad,
+            else => unreachable,
+        };
+
+        if (!strict and self.current_token.tag != .less_than) {
+            return .{ .partial = .{ .columns = columns, .rows = rows } };
+        }
 
         _ = try self.expectToken(.less_than);
         const elem_type_token = self.nextToken();
@@ -473,50 +577,10 @@ const Parser = struct {
         };
         _ = try self.expectToken(.greater_than);
 
-        return .{
-            .element_type = elem_type,
-            .columns = prefix.columns,
-            .rows = prefix.rows,
-        };
+        return .{ .full = .{ .columns = columns, .rows = rows, .element_type = elem_type } };
     }
 
-    /// MatrixType
-    ///     <- KEYWORD_mat2x2
-    ///      / KEYWORD_mat2x3
-    ///      / KEYWORD_mat2x4
-    ///      / KEYWORD_mat3x2
-    ///      / KEYWORD_mat3x3
-    ///      / KEYWORD_mat3x4
-    ///      / KEYWORD_mat4x2
-    ///      / KEYWORD_mat4x3
-    ///      / KEYWORD_mat4x4
-    pub fn parseMatrixTypePrefix(self: *Parser) !Ast.MatrixType.Prefix {
-        const token = self.nextToken();
-        if (!token.tag.isMatrixType()) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_matrix_type = {} },
-            });
-            return error.Parsing;
-        }
-
-        return .{
-            .columns = switch (token.tag) {
-                .keyword_mat2x2, .keyword_mat2x3, .keyword_mat2x4 => .bi,
-                .keyword_mat3x2, .keyword_mat3x3, .keyword_mat3x4 => .tri,
-                .keyword_mat4x2, .keyword_mat4x3, .keyword_mat4x4 => .quad,
-                else => unreachable,
-            },
-            .rows = switch (token.tag) {
-                .keyword_mat2x2, .keyword_mat3x2, .keyword_mat4x2 => .bi,
-                .keyword_mat2x3, .keyword_mat3x3, .keyword_mat4x3 => .tri,
-                .keyword_mat2x4, .keyword_mat3x4, .keyword_mat4x4 => .quad,
-                else => unreachable,
-            },
-        };
-    }
-
-    /// AtomicType <- KEYWORD_atomic LESS_THAN KEYWORD_i32 / KEYWORD_u32 GREATER_THAN
+    /// AtomicType <- KEYWORD_atomic LESS_THAN KEYWORD_i32 | KEYWORD_u32 GREATER_THAN
     pub fn parseAtomicType(self: *Parser) !Ast.AtomicType {
         const token = self.nextToken();
         if (token.tag != .keyword_atomic) {
@@ -536,11 +600,11 @@ const Parser = struct {
     /// ArrayType
     ///     <- KEYWORD_array LESS_THAN
     ///        ScalarType
-    ///      / VectorType
-    ///      / MatrixType
-    ///      / AtomicType
-    ///      / ArrayType
-    ///      / StructType GREATER_THAN
+    ///      | VectorType
+    ///      | MatrixType
+    ///      | AtomicType
+    ///      | ArrayType
+    ///      | StructType GREATER_THAN
     ///
     /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
     pub fn parseArrayType(self: *Parser) error{ Parsing, OutOfMemory }!Ast.ArrayType {
@@ -583,6 +647,10 @@ const Parser = struct {
         return if (self.current_token.tag == tag) self.nextToken() else null;
     }
 
+    fn peekToken(self: *Parser) Token {
+        return self.tokenizer.peek();
+    }
+
     fn nextToken(self: *Parser) Token {
         const current = self.current_token;
         self.current_token = self.tokenizer.next();
@@ -623,6 +691,7 @@ test {
     const t = std.time.microTimestamp();
     const str =
         \\type t1 = array<i32, vec3(1, 2, 3)>;
+        \\type t1 = array<i32, bitcast<f16>(1)>;
     ** 1;
     var p = try parse(std.heap.c_allocator, str, .{});
     defer p.deinit(std.heap.c_allocator);
@@ -637,9 +706,9 @@ test {
     try std.testing.expectEqual(Ast.PlainType{ .scalar = .i32 }, array_i32_elem_type);
 
     const vec3_expr = p.expressions.items[array_i32.size.static].construct;
-    const vec3_comps = p.expressions.items[vec3_expr.components.?.start..vec3_expr.components.?.end];
+    const vec3_comps = p.expressions.items[vec3_expr.components.multi.start..vec3_expr.components.multi.end];
     try std.testing.expectEqual(
-        @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .partial_vector = .tri }),
+        @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .vector = .{ .partial = .{ .size = .tri } } }),
         vec3_expr.type,
     );
     try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);

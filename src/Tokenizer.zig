@@ -42,31 +42,32 @@ pub fn init(source: [:0]const u8) Tokenizer {
     };
 }
 
-pub fn next(self: *Tokenizer) Token {
-    var state: State = .start;
+pub fn peek(self: *Tokenizer) Token {
+    var index = self.index;
+    var state = State.start;
     var result = Token{
         .tag = .eof,
         .loc = .{
-            .start = self.index,
+            .start = index,
             .end = undefined,
         },
     };
 
-    while (true) : (self.index += 1) {
-        const c = self.source[self.index];
+    while (true) : (index += 1) {
+        const c = self.source[index];
         switch (state) {
             .start => switch (c) {
                 0 => {
-                    if (self.index != self.source.len) {
+                    if (index != self.source.len) {
                         result.tag = .invalid;
-                        result.loc.start = self.index;
-                        self.index += 1;
-                        result.loc.end = self.index;
+                        result.loc.start = index;
+                        index += 1;
+                        result.loc.end = index;
                         return result;
                     }
                     break;
                 },
-                ' ', '\n', '\t', '\r' => result.loc.start = self.index + 1,
+                ' ', '\n', '\t', '\r' => result.loc.start = index + 1,
                 'a'...'z', 'A'...'Z' => state = .identifier,
                 '0'...'9' => state = .number,
 
@@ -86,62 +87,62 @@ pub fn next(self: *Tokenizer) Token {
 
                 '@' => {
                     result.tag = .attr;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '[' => {
                     result.tag = .bracket_left;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 ']' => {
                     result.tag = .bracket_right;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '{' => {
                     result.tag = .brace_left;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '}' => {
                     result.tag = .brace_right;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 ':' => {
                     result.tag = .colon;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 ',' => {
                     result.tag = .comma;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '(' => {
                     result.tag = .paren_left;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 ')' => {
                     result.tag = .paren_right;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '.' => {
                     result.tag = .period;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 ';' => {
                     result.tag = .semicolon;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '~' => {
                     result.tag = .tilde;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
 
@@ -156,7 +157,7 @@ pub fn next(self: *Tokenizer) Token {
                 'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
                 else => {
                     result.tag = .identifier;
-                    if (Token.keywords.get(self.source[result.loc.start..self.index])) |tag| {
+                    if (Token.keywords.get(self.source[result.loc.start..index])) |tag| {
                         result.tag = tag;
                     }
                     break;
@@ -182,7 +183,7 @@ pub fn next(self: *Tokenizer) Token {
                 0 => break,
                 '\n' => {
                     state = .start;
-                    result.loc.start = self.index + 1;
+                    result.loc.start = index + 1;
                 },
                 else => {},
             },
@@ -190,12 +191,12 @@ pub fn next(self: *Tokenizer) Token {
             .ampersand => switch (c) {
                 '&' => {
                     result.tag = .and_and;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '=' => {
                     result.tag = .and_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -206,7 +207,7 @@ pub fn next(self: *Tokenizer) Token {
             .bang => switch (c) {
                 '=' => {
                     result.tag = .not_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -217,7 +218,7 @@ pub fn next(self: *Tokenizer) Token {
             .equal => switch (c) {
                 '=' => {
                     result.tag = .equal_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -229,7 +230,7 @@ pub fn next(self: *Tokenizer) Token {
                 '>' => state = .shift_right,
                 '=' => {
                     result.tag = .greater_than_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -240,7 +241,7 @@ pub fn next(self: *Tokenizer) Token {
             .shift_right => switch (c) {
                 '=' => {
                     result.tag = .shift_right_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -252,7 +253,7 @@ pub fn next(self: *Tokenizer) Token {
                 '<' => state = .shift_left,
                 '=' => {
                     result.tag = .less_than_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -263,7 +264,7 @@ pub fn next(self: *Tokenizer) Token {
             .shift_left => switch (c) {
                 '=' => {
                     result.tag = .shift_left_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -274,17 +275,17 @@ pub fn next(self: *Tokenizer) Token {
             .minus => switch (c) {
                 '-' => {
                     result.tag = .minus_minus;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '=' => {
                     result.tag = .minus_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '>' => {
                     result.tag = .arrow;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -295,7 +296,7 @@ pub fn next(self: *Tokenizer) Token {
             .mod => switch (c) {
                 '=' => {
                     result.tag = .modulo_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -306,12 +307,12 @@ pub fn next(self: *Tokenizer) Token {
             .pipe => switch (c) {
                 '|' => {
                     result.tag = .or_or;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '=' => {
                     result.tag = .or_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -322,12 +323,12 @@ pub fn next(self: *Tokenizer) Token {
             .plus => switch (c) {
                 '+' => {
                     result.tag = .plus_plus;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 '=' => {
                     result.tag = .plus_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -339,7 +340,7 @@ pub fn next(self: *Tokenizer) Token {
                 '/' => state = .block_comment,
                 '=' => {
                     result.tag = .division_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -350,7 +351,7 @@ pub fn next(self: *Tokenizer) Token {
             .star => switch (c) {
                 '=' => {
                     result.tag = .times_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -361,7 +362,7 @@ pub fn next(self: *Tokenizer) Token {
             .xor => switch (c) {
                 '=' => {
                     result.tag = .xor_equal;
-                    self.index += 1;
+                    index += 1;
                     break;
                 },
                 else => {
@@ -372,8 +373,14 @@ pub fn next(self: *Tokenizer) Token {
         }
     }
 
-    result.loc.end = self.index;
+    result.loc.end = index;
     return result;
+}
+
+pub fn next(self: *Tokenizer) Token {
+    const tok = self.peek();
+    self.index = tok.loc.end;
+    return tok;
 }
 
 test "tokenize identifier and numbers" {

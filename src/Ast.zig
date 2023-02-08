@@ -17,6 +17,22 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.types.deinit(allocator);
 }
 
+pub fn getGlobal(self: Ast, i: Index(GlobalDecl)) GlobalDecl {
+    return self.globals.items[i];
+}
+
+pub fn getExpr(self: Ast, i: Index(Expression)) Expression {
+    return self.expressions.items[i];
+}
+
+pub fn getExprRange(self: Ast, r: Range(Expression)) []const Expression {
+    return self.expressions.items[r.start..r.end];
+}
+
+pub fn getPlainType(self: Ast, i: Index(PlainType)) PlainType {
+    return self.types.items[i];
+}
+
 pub fn Span(comptime T: type) type {
     return union(enum) {
         zero,
@@ -65,6 +81,7 @@ pub const Expression = union(enum) {
     deref: Index(Expression),
     binary: BinaryOperator,
     call: FunctionCall,
+    bitcast: BitcastExpr,
     index: struct { // TODO
         base: Index(Expression),
         index: Index(Expression),
@@ -73,7 +90,6 @@ pub const Expression = union(enum) {
         base: Index(Expression),
         field: []const u8,
     },
-    bitcast: BitcastExpr,
 };
 
 pub const Literal = union(enum) {
@@ -97,7 +113,7 @@ pub const Literal = union(enum) {
 };
 
 pub const ConstructExpr = struct {
-    type: union(enum) {
+    pub const Type = union(enum) {
         /// f32(e1,...eN), ...
         scalar: ScalarType,
         /// vec3<T?>(e1,...eN)
@@ -109,7 +125,9 @@ pub const ConstructExpr = struct {
         /// array<T, N?>(e1,...eN)
         full_array: ArrayType,
         user: []const u8,
-    },
+    };
+
+    type: Type,
     components: Span(Expression),
 };
 
@@ -214,6 +232,12 @@ pub const VectorType = union(enum) {
     partial: Partial,
     full: Full,
 
+    pub fn size(self: VectorType) Size {
+        return switch (self) {
+            inline else => |s| s.size,
+        };
+    }
+
     pub const Full = struct {
         size: Size,
         element_type: ScalarType,
@@ -223,16 +247,32 @@ pub const VectorType = union(enum) {
         size: Size,
     };
 
-    pub const Size = enum {
-        bi,
-        tri,
-        quad,
+    pub const Size = enum(u3) {
+        bi = 2,
+        tri = 3,
+        quad = 4,
     };
 };
 
 pub const MatrixType = union(enum) {
     partial: Partial,
     full: Full,
+
+    pub fn len(self: MatrixType) u6 {
+        return @enumToInt(self.columns()) * @enumToInt(self.rows());
+    }
+
+    pub fn columns(self: MatrixType) VectorType.Size {
+        return switch (self) {
+            inline else => |s| s.columns,
+        };
+    }
+
+    pub fn rows(self: MatrixType) VectorType.Size {
+        return switch (self) {
+            inline else => |s| s.rows,
+        };
+    }
 
     pub const Full = struct {
         rows: VectorType.Size,

@@ -4,14 +4,14 @@ tag: Tag,
 loc: Loc,
 
 pub const Loc = struct {
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
 
     pub const Extra = struct {
-        line: usize,
-        col: usize,
-        line_start: usize,
-        line_end: usize,
+        line: u32,
+        col: u32,
+        line_start: u32,
+        line_end: u32,
     };
 
     pub fn asStr(self: Loc, source: []const u8) []const u8 {
@@ -23,19 +23,19 @@ pub const Loc = struct {
             .line = 1,
             .col = 1,
             .line_start = 0,
-            .line_end = source.len,
+            .line_end = @intCast(u32, source.len),
         };
 
         for (source[0..self.start]) |c, i| {
             if (c == '\n') {
                 result.line += 1;
-                result.line_start = i + 1;
+                result.line_start = @intCast(u32, i) + 1;
             }
         }
 
         for (source[self.end..]) |c, i| {
             if (c == '\n') {
-                result.line_end = self.end + i;
+                result.line_end = self.end + @intCast(u32, i);
                 break;
             }
         }

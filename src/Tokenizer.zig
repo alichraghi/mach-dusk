@@ -4,7 +4,7 @@ const Token = @import("Token.zig");
 const Tokenizer = @This();
 
 source: [:0]const u8,
-index: usize,
+index: u32,
 
 const State = enum {
     start,
@@ -35,7 +35,7 @@ pub fn dump(self: *Tokenizer, token: Token) void {
 
 pub fn init(source: [:0]const u8) Tokenizer {
     // Skip the UTF-8 BOM if present
-    const src_start: usize = if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else 0;
+    const src_start: u32 = if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else 0;
     return Tokenizer{
         .source = source[src_start..],
         .index = 0,

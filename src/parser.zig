@@ -87,6 +87,7 @@ const Parser = struct {
             expected_at_least_x_args: u8,
             exceeded_max_args: u8,
             invalid_bitcast_dest_type,
+            expected_fixed_array_type,
         };
     };
 
@@ -188,6 +189,9 @@ const Parser = struct {
                         err.token.tag.symbol(),
                     });
                 },
+                .expected_fixed_array_type => {
+                    try bw_writer.print("expected a fixed size array", .{});
+                },
             }
             try bw_writer.writeByte('\n');
 
@@ -210,11 +214,14 @@ const Parser = struct {
 
     /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL PlainType
     fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
+        // There's no need to check for first token in global decls
         _ = self.nextToken();
+
         const name = try self.expectToken(.identifier);
         _ = try self.expectToken(.equal);
         const value = try self.parsePlainType();
         _ = try self.expectToken(.semicolon);
+
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
@@ -237,7 +244,7 @@ const Parser = struct {
         } else if (token.tag == .keyword_atomic) {
             return .{ .atomic = try self.parseAtomicType() };
         } else if (token.tag == .keyword_array) {
-            return .{ .array = try self.parseArrayType() };
+            return .{ .array = try self.parseArrayType(false) };
         } else if (token.tag == .identifier) {
             _ = self.nextToken();
             return .{ .user = token.loc.asStr(self.source) };
@@ -394,13 +401,14 @@ const Parser = struct {
         _ = try self.expectToken(.less_than);
         const elem_type = try self.parseScalarType();
         _ = try self.expectToken(.greater_than);
+
         return .{ .element_type = elem_type };
     }
 
     /// ArrayType <- KEYWORD_array LESS_THAN PlainType GREATER_THAN
     ///
     /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
-    pub fn parseArrayType(self: *Parser) error{ Parsing, OutOfMemory }!Ast.ArrayType {
+    pub fn parseArrayType(self: *Parser, fixed_only: bool) error{ Parsing, OutOfMemory }!Ast.ArrayType {
         const token = self.nextToken();
         if (token.tag != .keyword_array) {
             try self.addError(.{
@@ -418,9 +426,18 @@ const Parser = struct {
             const size = try self.addExpr(try self.parseExpr());
             _ = try self.expectToken(.greater_than);
             return .{ .element_type = elem_type, .size = .{ .static = size } };
+        } else {
+            if (fixed_only and self.current_token.tag == .greater_than) {
+                try self.addError(.{
+                    .token = token,
+                    .tag = .{ .expected_fixed_array_type = {} },
+                });
+                return error.Parsing;
+            }
         }
 
         _ = try self.expectToken(.greater_than);
+
         return .{ .element_type = elem_type, .size = .dynamic };
     }
 
@@ -489,15 +506,15 @@ const Parser = struct {
             };
         } else if (token.tag.isVectorType()) { // TODO max args
             const vector_type = try self.parseVectorType(false);
-            const args = try self.parseCallArguments(0, max_call_args);
+            const args = try self.parseCallArguments(0, @enumToInt(vector_type.size()));
             return .{ .type = .{ .vector = vector_type }, .components = args };
         } else if (token.tag.isMatrixType()) {
             const matrix_type = try self.parseMatrixType(false);
-            const args = try self.parseCallArguments(0, max_call_args);
+            const args = try self.parseCallArguments(0, matrix_type.len());
             return .{ .type = .{ .matrix = matrix_type }, .components = args };
         } else if (token.tag == .keyword_array) {
             if (self.peekToken().tag == .less_than) {
-                const array_type = try self.parseArrayType();
+                const array_type = try self.parseArrayType(true);
                 const args = try self.parseCallArguments(0, max_call_args);
                 return .{
                     .type = .{ .full_array = array_type },
@@ -507,6 +524,7 @@ const Parser = struct {
 
             _ = self.nextToken();
             const args = try self.parseCallArguments(0, max_call_args);
+
             return .{
                 .type = .{ .partial_array = {} },
                 .components = args,
@@ -677,37 +695,27 @@ test {
     });
 }
 
+const expectEqual = std.testing.expectEqual;
 test {
-    const t = std.time.microTimestamp();
-    const str =
+    const source =
         \\type t1 = array<i32, vec3(1, 2, 3)>;
-        \\type t1 = array<i32, bitcast<i32>(1)>;
-    ** 1;
-    var p = try parse(std.heap.c_allocator, str, .{});
-    defer p.deinit(std.heap.c_allocator);
+        \\//type t2 = bitcast<i32>(1);
+        \\type t2 = array<i32, array(1)>;
+    ;
+    var ast = try parse(std.testing.allocator, source, .{});
+    defer ast.deinit(std.testing.allocator);
 
-    std.debug.print("\ntook: {d}ms\n", .{
-        @intToFloat(f64, std.time.microTimestamp() - t) / std.time.us_per_ms,
-    });
+    const t1_type = ast.getGlobal(0).type_alias.type.array;
+    const t1_elem_type = ast.getPlainType(t1_type.element_type);
+    const t1_size_expr = ast.getExpr(t1_type.size.static).construct;
+    const t1_size_expr_comps = ast.getExprRange(t1_size_expr.components.multi);
 
-    const t1 = p.globals.items[0].type_alias;
-    const array_i32 = t1.type.array;
-    const array_i32_elem_type = p.types.items[array_i32.element_type];
-    try std.testing.expectEqual(Ast.PlainType{ .scalar = .i32 }, array_i32_elem_type);
+    try expectEqual(Ast.ScalarType.i32, t1_elem_type.scalar);
+    try expectEqual(Ast.VectorType.Size.tri, t1_size_expr.type.vector.partial.size);
+    try expectEqual(@as(i64, 1), t1_size_expr_comps[0].literal.number.abstract_int);
+    try expectEqual(@as(i64, 2), t1_size_expr_comps[1].literal.number.abstract_int);
+    try expectEqual(@as(i64, 3), t1_size_expr_comps[2].literal.number.abstract_int);
 
-    const vec3_expr = p.expressions.items[array_i32.size.static].construct;
-    const vec3_comps = p.expressions.items[vec3_expr.components.multi.start..vec3_expr.components.multi.end];
-    try std.testing.expectEqual(
-        @as(std.meta.fieldInfo(Ast.ConstructExpr, .type).type, .{ .vector = .{ .partial = .{ .size = .tri } } }),
-        vec3_expr.type,
-    );
-    try std.testing.expectEqual(@as(usize, 3), vec3_comps.len);
-    try std.testing.expectEqual(
-        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 2 } } },
-        vec3_comps[1],
-    );
-    try std.testing.expectEqual(
-        Ast.Expression{ .literal = .{ .number = .{ .abstract_int = 3 } } },
-        vec3_comps[2],
-    );
+    // const t1_dest_type = ast.getGlobal(1).type_alias.type.array;
+    // const t1_expr = ast.getPlainType(t1_type.element_type);
 }

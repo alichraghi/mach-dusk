@@ -26,8 +26,8 @@ pub fn parse(
         parser.ast.deinit(allocator);
     }
 
-    try parser.ast.globals.ensureTotalCapacityPrecise(allocator, source.len / 50); // 1:50 source to globals
-    try parser.ast.expressions.ensureTotalCapacityPrecise(allocator, source.len / 5); // 1:5 source to expressions
+    try parser.ast.globals.ensureTotalCapacityPrecise(allocator, source.len / 300); // 1:300 source to globals
+    try parser.ast.expressions.ensureTotalCapacityPrecise(allocator, source.len / 10); // 1:10 source to expressions
 
     while (true) {
         const token = parser.current_token;
@@ -178,10 +178,10 @@ const Parser = struct {
                     });
                 },
                 .expected_at_least_x_args => |min| {
-                    try bw_writer.print("expected at least {} args", .{min});
+                    try bw_writer.print("expected at least {} arguments", .{min});
                 },
                 .exceeded_max_args => |max| {
-                    try bw_writer.print("exceeded maximum call arguments number ({})", .{max});
+                    try bw_writer.print("exceeded maximum call arguments ({})", .{max});
                 },
                 .invalid_bitcast_dest_type => {
                     try bw_writer.print("invalid bitcast destination type. must be eathir ('i32', 'u32' or 'f32') but found '{s}'", .{
@@ -256,11 +256,10 @@ const Parser = struct {
         ) };
     }
 
-    /// ConstructExpr
-    ///              <- VectorType
-    ///               | MatrixType
-    ///               | (KEYWORD_array | ArrayType)
-    ///                 LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
+    /// ConstructExpr <- VectorType
+    ///                | MatrixType
+    ///                | (KEYWORD_array | ArrayType)
+    ///                  LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
     fn parseConstructExpr(self: *Parser) !Ast.ConstructExpr {
         const token = self.current_token;
         if (token.tag.isScalarType()) {
@@ -305,55 +304,54 @@ const Parser = struct {
         return error.Parsing;
     }
 
-    /// BitcastExpr
-    ///              <- VectorType
-    ///               | MatrixType
-    ///               | (KEYWORD_array | ArrayType)
-    ///                 LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
+    /// BitcastExpr <- KEYWORD_bitcast LESS_THAN
+    ///                KEYWORD_i32
+    ///              | KEYWORD_u32
+    ///              | KEYWORD_f32 GREATER_THAN
     fn parseBitcastExpr(self: *Parser) !Ast.BitcastExpr {
         const token = self.nextToken();
-        if (token.tag == .keyword_bitcast) {
-            _ = try self.expectToken(.less_than);
-
-            const scalar_type = try self.parseScalarType();
-            switch (scalar_type) {
-                .i32, .u32, .f32 => {},
-                else => {
-                    try self.addError(.{
-                        .token = token,
-                        .tag = .{ .invalid_bitcast_dest_type = {} },
-                    });
-                    return error.Parsing;
-                },
-            }
-
-            _ = try self.expectToken(.greater_than);
-            const args = try self.parseCallArguments(1, 1);
-            return .{
-                .dest = scalar_type,
-                .expr = args.one,
-            };
+        if (token.tag != .keyword_bitcast) {
+            try self.addError(.{
+                .token = token,
+                .tag = .{ .expected_bitcast_expr = {} },
+            });
+            return error.Parsing;
         }
 
-        try self.addError(.{
-            .token = token,
-            .tag = .{ .expected_bitcast_expr = {} },
-        });
-        return error.Parsing;
+        _ = try self.expectToken(.less_than);
+
+        const dest_type_token = self.nextToken();
+        const dest_type: Ast.ScalarType = switch (dest_type_token.tag) {
+            .keyword_i32 => .i32,
+            .keyword_u32 => .u32,
+            .keyword_f32 => .f32,
+            else => {
+                try self.addError(.{
+                    .token = dest_type_token,
+                    .tag = .{ .invalid_bitcast_dest_type = {} },
+                });
+                return error.Parsing;
+            },
+        };
+
+        _ = try self.expectToken(.greater_than);
+        const args = try self.parseCallArguments(1, 1);
+        return .{
+            .dest = dest_type,
+            .expr = args.one,
+        };
     }
 
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
     fn parseCallArguments(self: *Parser, min: u8, max: u8) error{ Parsing, OutOfMemory }!Ast.Span(Ast.Expression) {
         std.debug.assert(max <= max_call_args);
 
-        _ = try self.expectToken(.paren_left);
+        var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
+        const l_paren_token = try self.expectToken(.paren_left);
+
         if (self.current_token.tag == .paren_right) {
             _ = self.nextToken();
-            return .{ .zero = {} };
-        }
-
-        var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
-        while (true) {
+        } else while (true) {
             const expr_token = self.current_token;
             args.append(try self.parseExpr()) catch {
                 try self.addError(.{
@@ -387,13 +385,15 @@ const Parser = struct {
 
         if (args.len < min) {
             try self.addError(.{
-                .token = self.current_token,
+                .token = l_paren_token,
                 .tag = .{ .expected_at_least_x_args = min },
             });
             return error.Parsing;
         }
 
-        if (args.len == 1) {
+        if (args.len == 0) {
+            return .{ .zero = {} };
+        } else if (args.len == 1) {
             try self.ast.expressions.append(self.allocator, args.get(0));
             return .{ .one = @intCast(u32, self.ast.expressions.items.len - 1) };
         } else {
@@ -410,19 +410,18 @@ const Parser = struct {
         _ = self.nextToken();
         const name = try self.expectToken(.identifier);
         _ = try self.expectToken(.equal);
-        const value = try self.parseType();
+        const value = try self.parsePlainType();
         _ = try self.expectToken(.semicolon);
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
-    /// Type
-    ///     <- ScalarType
-    ///      | VectorType.Full
-    ///      | MatrixType.Full
-    ///      | AtomicType
-    ///      | ArrayType
-    ///      | IDENTIFIER
-    fn parseType(self: *Parser) !Ast.PlainType {
+    /// PlainType <- ScalarType
+    ///            | VectorType.Full
+    ///            | MatrixType.Full
+    ///            | AtomicType
+    ///            | ArrayType
+    ///            | IDENTIFIER
+    fn parsePlainType(self: *Parser) !Ast.PlainType {
         const token = self.current_token;
         if (token.tag.isScalarType()) {
             return .{ .scalar = try self.parseScalarType() };
@@ -448,12 +447,11 @@ const Parser = struct {
         return error.Parsing;
     }
 
-    /// ScalarType
-    ///     <- KEYWORD_i32
-    ///      | KEYWORD_u32
-    ///      | KEYWORD_f32
-    ///      | KEYWORD_f16
-    ///      | KEYWORD_bool
+    /// ScalarType <- KEYWORD_i32
+    ///             | KEYWORD_u32
+    ///             | KEYWORD_f32
+    ///             | KEYWORD_f16
+    ///             | KEYWORD_bool
     fn parseScalarType(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         return switch (token.tag) {
@@ -525,16 +523,15 @@ const Parser = struct {
     ///
     /// MatrixType.Full <- MatrixType.Partial LESS_THAN KEYWORD_f32 | KEYWORD_f16 GREATER_THAN
     ///
-    /// MatrixType.Partial
-    ///     <- KEYWORD_mat2x2
-    ///      | KEYWORD_mat2x3
-    ///      | KEYWORD_mat2x4
-    ///      | KEYWORD_mat3x2
-    ///      | KEYWORD_mat3x3
-    ///      | KEYWORD_mat3x4
-    ///      | KEYWORD_mat4x2
-    ///      | KEYWORD_mat4x3
-    ///      | KEYWORD_mat4x4
+    /// MatrixType.Partial <- KEYWORD_mat2x2
+    ///                     | KEYWORD_mat2x3
+    ///                     | KEYWORD_mat2x4
+    ///                     | KEYWORD_mat3x2
+    ///                     | KEYWORD_mat3x3
+    ///                     | KEYWORD_mat3x4
+    ///                     | KEYWORD_mat4x2
+    ///                     | KEYWORD_mat4x3
+    ///                     | KEYWORD_mat4x4
     pub fn parseMatrixType(self: *Parser, strict: bool) !Ast.MatrixType {
         const token = self.nextToken();
         if (!token.tag.isMatrixType()) {
@@ -597,14 +594,13 @@ const Parser = struct {
         return .{ .element_type = elem_type };
     }
 
-    /// ArrayType
-    ///     <- KEYWORD_array LESS_THAN
-    ///        ScalarType
-    ///      | VectorType
-    ///      | MatrixType
-    ///      | AtomicType
-    ///      | ArrayType
-    ///      | StructType GREATER_THAN
+    /// ArrayType <- KEYWORD_array LESS_THAN
+    ///              ScalarType
+    ///            | VectorType
+    ///            | MatrixType
+    ///            | AtomicType
+    ///            | ArrayType
+    ///            | StructType GREATER_THAN
     ///
     /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
     pub fn parseArrayType(self: *Parser) error{ Parsing, OutOfMemory }!Ast.ArrayType {
@@ -619,7 +615,7 @@ const Parser = struct {
 
         _ = try self.expectToken(.less_than);
         const elem_type = @intCast(u32, self.ast.types.items.len);
-        try self.ast.types.append(self.allocator, try self.parseType());
+        try self.ast.types.append(self.allocator, try self.parsePlainType());
 
         if (self.eatToken(.comma)) |_| {
             const size = try self.addExpr(try self.parseExpr());
@@ -691,7 +687,7 @@ test {
     const t = std.time.microTimestamp();
     const str =
         \\type t1 = array<i32, vec3(1, 2, 3)>;
-        \\type t1 = array<i32, bitcast<f16>(1)>;
+        \\type t1 = array<i32, bitcast<i32>(1)>;
     ** 1;
     var p = try parse(std.heap.c_allocator, str, .{});
     defer p.deinit(std.heap.c_allocator);

@@ -186,7 +186,6 @@ pub const PlainType = union(enum) {
     sampler: SamplerType,
     atomic: AtomicType,
     array: ArrayType,
-    strct: StructType,
     /// A user-defined type, like a struct or a type alias.
     user: []const u8,
 };
@@ -260,5 +259,3 @@ pub const ArrayType = struct {
     size: Size,
     element_type: Index(PlainType),
 };
-
-pub const StructType = struct {};

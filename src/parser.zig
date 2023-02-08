@@ -208,6 +208,222 @@ const Parser = struct {
         try bw.flush();
     }
 
+    /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL PlainType
+    fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
+        _ = self.nextToken();
+        const name = try self.expectToken(.identifier);
+        _ = try self.expectToken(.equal);
+        const value = try self.parsePlainType();
+        _ = try self.expectToken(.semicolon);
+        return .{ .name = name.loc.asStr(self.source), .type = value };
+    }
+
+    /// PlainType <- ScalarType
+    ///            | VectorType.Full
+    ///            | MatrixType.Full
+    ///            | AtomicType
+    ///            | ArrayType
+    ///            | IDENTIFIER
+    fn parsePlainType(self: *Parser) !Ast.PlainType {
+        const token = self.current_token;
+        if (token.tag.isScalarType()) {
+            return .{ .scalar = try self.parseScalarType() };
+        } else if (token.tag.isSamplerType()) {
+            return .{ .sampler = try self.parseSamplerType() };
+        } else if (token.tag.isVectorType()) {
+            return .{ .vector = try self.parseVectorType(true) };
+        } else if (token.tag.isMatrixType()) {
+            return .{ .matrix = try self.parseMatrixType(true) };
+        } else if (token.tag == .keyword_atomic) {
+            return .{ .atomic = try self.parseAtomicType() };
+        } else if (token.tag == .keyword_array) {
+            return .{ .array = try self.parseArrayType() };
+        } else if (token.tag == .identifier) {
+            _ = self.nextToken();
+            return .{ .user = token.loc.asStr(self.source) };
+        }
+
+        try self.addError(.{
+            .token = token,
+            .tag = .{ .expected_type = {} },
+        });
+        return error.Parsing;
+    }
+
+    /// ScalarType <- KEYWORD_i32
+    ///             | KEYWORD_u32
+    ///             | KEYWORD_f32
+    ///             | KEYWORD_f16
+    ///             | KEYWORD_bool
+    fn parseScalarType(self: *Parser) !Ast.ScalarType {
+        const token = self.nextToken();
+        return switch (token.tag) {
+            .keyword_i32 => .i32,
+            .keyword_u32 => .u32,
+            .keyword_f32 => .f32,
+            .keyword_f16 => .f16,
+            .keyword_bool => .bool,
+            else => {
+                try self.addError(.{
+                    .token = token,
+                    .tag = .{ .expected_scalar_type = {} },
+                });
+                return error.Parsing;
+            },
+        };
+    }
+
+    /// SamplerType <- KEYWORD_sampler | KEYWORD_comparison_sampler
+    pub fn parseSamplerType(self: *Parser) !Ast.SamplerType {
+        const token = self.nextToken();
+        return switch (token.tag) {
+            .keyword_sampler => .{ .comparison = false },
+            .keyword_comparison_sampler => .{ .comparison = true },
+            else => {
+                try self.addError(.{
+                    .token = token,
+                    .tag = .{ .expected_sampler_type = {} },
+                });
+                return error.Parsing;
+            },
+        };
+    }
+
+    /// VectorType <- VectorType.Full | VectorType.Partial
+    ///
+    /// VectorType.Full <- VectorType.Partial LESS_THAN ScalarType GREATER_THAN
+    ///
+    /// VectorType.Partial <- KEYWORD_vec2
+    ///                     | KEYWORD_vec3
+    ///                     | KEYWORD_vec4
+    pub fn parseVectorType(self: *Parser, strict: bool) !Ast.VectorType {
+        const token = self.nextToken();
+        const size: Ast.VectorType.Size = switch (token.tag) {
+            .keyword_vec2 => .bi,
+            .keyword_vec3 => .tri,
+            .keyword_vec4 => .quad,
+            else => {
+                try self.addError(.{
+                    .token = token,
+                    .tag = .{ .expected_vector_type = {} },
+                });
+                return error.Parsing;
+            },
+        };
+
+        if (!strict and self.current_token.tag != .less_than) {
+            return .{ .partial = .{ .size = size } };
+        }
+
+        _ = try self.expectToken(.less_than);
+        const elem_type = try self.parseScalarType();
+        _ = try self.expectToken(.greater_than);
+
+        return .{ .full = .{ .size = size, .element_type = elem_type } };
+    }
+
+    /// MatrixType <- MatrixType.Full | MatrixType.Partial
+    ///
+    /// MatrixType.Full <- MatrixType.Partial LESS_THAN KEYWORD_f32 | KEYWORD_f16 GREATER_THAN
+    ///
+    /// MatrixType.Partial <- KEYWORD_mat2x2
+    ///                     | KEYWORD_mat2x3
+    ///                     | KEYWORD_mat2x4
+    ///                     | KEYWORD_mat3x2
+    ///                     | KEYWORD_mat3x3
+    ///                     | KEYWORD_mat3x4
+    ///                     | KEYWORD_mat4x2
+    ///                     | KEYWORD_mat4x3
+    ///                     | KEYWORD_mat4x4
+    pub fn parseMatrixType(self: *Parser, strict: bool) !Ast.MatrixType {
+        const token = self.nextToken();
+        if (!token.tag.isMatrixType()) {
+            try self.addError(.{
+                .token = token,
+                .tag = .{ .expected_matrix_type = {} },
+            });
+            return error.Parsing;
+        }
+
+        const columns: Ast.VectorType.Size = switch (token.tag) {
+            .keyword_mat2x2, .keyword_mat2x3, .keyword_mat2x4 => .bi,
+            .keyword_mat3x2, .keyword_mat3x3, .keyword_mat3x4 => .tri,
+            .keyword_mat4x2, .keyword_mat4x3, .keyword_mat4x4 => .quad,
+            else => unreachable,
+        };
+        const rows: Ast.VectorType.Size = switch (token.tag) {
+            .keyword_mat2x2, .keyword_mat3x2, .keyword_mat4x2 => .bi,
+            .keyword_mat2x3, .keyword_mat3x3, .keyword_mat4x3 => .tri,
+            .keyword_mat2x4, .keyword_mat3x4, .keyword_mat4x4 => .quad,
+            else => unreachable,
+        };
+
+        if (!strict and self.current_token.tag != .less_than) {
+            return .{ .partial = .{ .columns = columns, .rows = rows } };
+        }
+
+        _ = try self.expectToken(.less_than);
+        const elem_type_token = self.nextToken();
+        const elem_type: Ast.ScalarType = switch (elem_type_token.tag) {
+            .keyword_f32 => .f32,
+            .keyword_f16 => .f16,
+            else => {
+                try self.addError(.{
+                    .token = elem_type_token,
+                    .tag = .{ .expected_float_type = {} },
+                });
+                return error.Parsing;
+            },
+        };
+        _ = try self.expectToken(.greater_than);
+
+        return .{ .full = .{ .columns = columns, .rows = rows, .element_type = elem_type } };
+    }
+
+    /// AtomicType <- KEYWORD_atomic LESS_THAN KEYWORD_i32 | KEYWORD_u32 GREATER_THAN
+    pub fn parseAtomicType(self: *Parser) !Ast.AtomicType {
+        const token = self.nextToken();
+        if (token.tag != .keyword_atomic) {
+            try self.addError(.{
+                .token = token,
+                .tag = .{ .expected_atomic_type = {} },
+            });
+            return error.Parsing;
+        }
+
+        _ = try self.expectToken(.less_than);
+        const elem_type = try self.parseScalarType();
+        _ = try self.expectToken(.greater_than);
+        return .{ .element_type = elem_type };
+    }
+
+    /// ArrayType <- KEYWORD_array LESS_THAN PlainType GREATER_THAN
+    ///
+    /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
+    pub fn parseArrayType(self: *Parser) error{ Parsing, OutOfMemory }!Ast.ArrayType {
+        const token = self.nextToken();
+        if (token.tag != .keyword_array) {
+            try self.addError(.{
+                .token = token,
+                .tag = .{ .expected_array_type = {} },
+            });
+            return error.Parsing;
+        }
+
+        _ = try self.expectToken(.less_than);
+        const elem_type = @intCast(u32, self.ast.types.items.len);
+        try self.ast.types.append(self.allocator, try self.parsePlainType());
+
+        if (self.eatToken(.comma)) |_| {
+            const size = try self.addExpr(try self.parseExpr());
+            _ = try self.expectToken(.greater_than);
+            return .{ .element_type = elem_type, .size = .{ .static = size } };
+        }
+
+        _ = try self.expectToken(.greater_than);
+        return .{ .element_type = elem_type, .size = .dynamic };
+    }
+
     /// Expression <- LiteralExpr | ConstructExpr
     fn parseExpr(self: *Parser) !Ast.Expression {
         const token = self.current_token;
@@ -403,228 +619,6 @@ const Parser = struct {
                 .end = @intCast(u32, self.ast.expressions.items.len),
             } };
         }
-    }
-
-    /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL Type
-    fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
-        _ = self.nextToken();
-        const name = try self.expectToken(.identifier);
-        _ = try self.expectToken(.equal);
-        const value = try self.parsePlainType();
-        _ = try self.expectToken(.semicolon);
-        return .{ .name = name.loc.asStr(self.source), .type = value };
-    }
-
-    /// PlainType <- ScalarType
-    ///            | VectorType.Full
-    ///            | MatrixType.Full
-    ///            | AtomicType
-    ///            | ArrayType
-    ///            | IDENTIFIER
-    fn parsePlainType(self: *Parser) !Ast.PlainType {
-        const token = self.current_token;
-        if (token.tag.isScalarType()) {
-            return .{ .scalar = try self.parseScalarType() };
-        } else if (token.tag.isSamplerType()) {
-            return .{ .sampler = try self.parseSamplerType() };
-        } else if (token.tag.isVectorType()) {
-            return .{ .vector = try self.parseVectorType(true) };
-        } else if (token.tag.isMatrixType()) {
-            return .{ .matrix = try self.parseMatrixType(true) };
-        } else if (token.tag == .keyword_atomic) {
-            return .{ .atomic = try self.parseAtomicType() };
-        } else if (token.tag == .keyword_array) {
-            return .{ .array = try self.parseArrayType() };
-        } else if (token.tag == .identifier) {
-            _ = self.nextToken();
-            return .{ .user = token.loc.asStr(self.source) };
-        }
-
-        try self.addError(.{
-            .token = token,
-            .tag = .{ .expected_type = {} },
-        });
-        return error.Parsing;
-    }
-
-    /// ScalarType <- KEYWORD_i32
-    ///             | KEYWORD_u32
-    ///             | KEYWORD_f32
-    ///             | KEYWORD_f16
-    ///             | KEYWORD_bool
-    fn parseScalarType(self: *Parser) !Ast.ScalarType {
-        const token = self.nextToken();
-        return switch (token.tag) {
-            .keyword_i32 => .i32,
-            .keyword_u32 => .u32,
-            .keyword_f32 => .f32,
-            .keyword_f16 => .f16,
-            .keyword_bool => .bool,
-            else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_scalar_type = {} },
-                });
-                return error.Parsing;
-            },
-        };
-    }
-
-    /// SamplerType <- KEYWORD_sampler | KEYWORD_comparison_sampler
-    pub fn parseSamplerType(self: *Parser) !Ast.SamplerType {
-        const token = self.nextToken();
-        return switch (token.tag) {
-            .keyword_sampler => .{ .comparison = false },
-            .keyword_comparison_sampler => .{ .comparison = true },
-            else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_sampler_type = {} },
-                });
-                return error.Parsing;
-            },
-        };
-    }
-
-    /// VectorType <- VectorType.Full | VectorType.Partial
-    ///
-    /// VectorType.Full <- VectorType.Partial LESS_THAN ScalarType GREATER_THAN
-    ///
-    /// VectorType.Partial <- KEYWORD_vec2
-    ///                     | KEYWORD_vec3
-    ///                     | KEYWORD_vec4
-    pub fn parseVectorType(self: *Parser, strict: bool) !Ast.VectorType {
-        const token = self.nextToken();
-        const size: Ast.VectorType.Size = switch (token.tag) {
-            .keyword_vec2 => .bi,
-            .keyword_vec3 => .tri,
-            .keyword_vec4 => .quad,
-            else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_vector_type = {} },
-                });
-                return error.Parsing;
-            },
-        };
-
-        if (!strict and self.current_token.tag != .less_than) {
-            return .{ .partial = .{ .size = size } };
-        }
-
-        _ = try self.expectToken(.less_than);
-        const elem_type = try self.parseScalarType();
-        _ = try self.expectToken(.greater_than);
-
-        return .{ .full = .{ .size = size, .element_type = elem_type } };
-    }
-
-    /// MatrixType <- MatrixType.Full | MatrixType.Partial
-    ///
-    /// MatrixType.Full <- MatrixType.Partial LESS_THAN KEYWORD_f32 | KEYWORD_f16 GREATER_THAN
-    ///
-    /// MatrixType.Partial <- KEYWORD_mat2x2
-    ///                     | KEYWORD_mat2x3
-    ///                     | KEYWORD_mat2x4
-    ///                     | KEYWORD_mat3x2
-    ///                     | KEYWORD_mat3x3
-    ///                     | KEYWORD_mat3x4
-    ///                     | KEYWORD_mat4x2
-    ///                     | KEYWORD_mat4x3
-    ///                     | KEYWORD_mat4x4
-    pub fn parseMatrixType(self: *Parser, strict: bool) !Ast.MatrixType {
-        const token = self.nextToken();
-        if (!token.tag.isMatrixType()) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_matrix_type = {} },
-            });
-            return error.Parsing;
-        }
-
-        const columns: Ast.VectorType.Size = switch (token.tag) {
-            .keyword_mat2x2, .keyword_mat2x3, .keyword_mat2x4 => .bi,
-            .keyword_mat3x2, .keyword_mat3x3, .keyword_mat3x4 => .tri,
-            .keyword_mat4x2, .keyword_mat4x3, .keyword_mat4x4 => .quad,
-            else => unreachable,
-        };
-        const rows: Ast.VectorType.Size = switch (token.tag) {
-            .keyword_mat2x2, .keyword_mat3x2, .keyword_mat4x2 => .bi,
-            .keyword_mat2x3, .keyword_mat3x3, .keyword_mat4x3 => .tri,
-            .keyword_mat2x4, .keyword_mat3x4, .keyword_mat4x4 => .quad,
-            else => unreachable,
-        };
-
-        if (!strict and self.current_token.tag != .less_than) {
-            return .{ .partial = .{ .columns = columns, .rows = rows } };
-        }
-
-        _ = try self.expectToken(.less_than);
-        const elem_type_token = self.nextToken();
-        const elem_type: Ast.ScalarType = switch (elem_type_token.tag) {
-            .keyword_f32 => .f32,
-            .keyword_f16 => .f16,
-            else => {
-                try self.addError(.{
-                    .token = elem_type_token,
-                    .tag = .{ .expected_float_type = {} },
-                });
-                return error.Parsing;
-            },
-        };
-        _ = try self.expectToken(.greater_than);
-
-        return .{ .full = .{ .columns = columns, .rows = rows, .element_type = elem_type } };
-    }
-
-    /// AtomicType <- KEYWORD_atomic LESS_THAN KEYWORD_i32 | KEYWORD_u32 GREATER_THAN
-    pub fn parseAtomicType(self: *Parser) !Ast.AtomicType {
-        const token = self.nextToken();
-        if (token.tag != .keyword_atomic) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_atomic_type = {} },
-            });
-            return error.Parsing;
-        }
-
-        _ = try self.expectToken(.less_than);
-        const elem_type = try self.parseScalarType();
-        _ = try self.expectToken(.greater_than);
-        return .{ .element_type = elem_type };
-    }
-
-    /// ArrayType <- KEYWORD_array LESS_THAN
-    ///              ScalarType
-    ///            | VectorType
-    ///            | MatrixType
-    ///            | AtomicType
-    ///            | ArrayType
-    ///            | StructType GREATER_THAN
-    ///
-    /// NOTE: ArrayType and StructType elements must have a creation-fixed footprint
-    pub fn parseArrayType(self: *Parser) error{ Parsing, OutOfMemory }!Ast.ArrayType {
-        const token = self.nextToken();
-        if (token.tag != .keyword_array) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_array_type = {} },
-            });
-            return error.Parsing;
-        }
-
-        _ = try self.expectToken(.less_than);
-        const elem_type = @intCast(u32, self.ast.types.items.len);
-        try self.ast.types.append(self.allocator, try self.parsePlainType());
-
-        if (self.eatToken(.comma)) |_| {
-            const size = try self.addExpr(try self.parseExpr());
-            _ = try self.expectToken(.greater_than);
-            return .{ .element_type = elem_type, .size = .{ .static = size } };
-        }
-
-        _ = try self.expectToken(.greater_than);
-        return .{ .element_type = elem_type, .size = .dynamic };
     }
 
     fn expectToken(self: *Parser, tag: Token.Tag) !Token {

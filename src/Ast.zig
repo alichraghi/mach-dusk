@@ -8,6 +8,8 @@ const Ast = @This();
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
+/// Contains expression's that a GlobalDecl in `globals` may need
+extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains PlainType's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(PlainType) = .{},
 
@@ -53,14 +55,19 @@ pub fn Index(comptime _: type) type {
 }
 
 pub const GlobalDecl = union(enum) {
-    variable: GlobalVariable,
+    variable: VariableStatement,
     function: Function,
     constant: Const,
     strct: Struct,
     type_alias: TypeAlias,
 };
 
-pub const GlobalVariable = struct {};
+pub const VariableStatement = struct {
+    constant: bool,
+    name: []const u8,
+    type: ?PlainType,
+    value: Index(Expression),
+};
 
 pub const Function = struct {};
 
@@ -76,11 +83,9 @@ pub const TypeAlias = struct {
 pub const Expression = union(enum) {
     literal: Literal,
     construct: ConstructExpr,
-    unary_operator: UnaryOperator,
-    addr_of: Index(Expression),
-    deref: Index(Expression),
-    binary: BinaryOperator,
-    call: FunctionCall,
+    unary: UnaryExpr,
+    binary: BinaryExpr,
+    call: CallExpr,
     bitcast: BitcastExpr,
     index: struct { // TODO
         base: Index(Expression),
@@ -90,6 +95,7 @@ pub const Expression = union(enum) {
         base: Index(Expression),
         field: []const u8,
     },
+    ident: []const u8,
 };
 
 pub const Literal = union(enum) {
@@ -128,7 +134,7 @@ pub const ConstructExpr = struct {
     };
 
     type: Type,
-    components: Span(Expression),
+    components: Span(Index(Expression)),
 };
 
 pub const BitcastExpr = struct {
@@ -137,23 +143,25 @@ pub const BitcastExpr = struct {
     expr: Index(Expression),
 };
 
-pub const FunctionCall = struct {
-    function: []const u8,
-    arguments: Range(Expression),
+pub const CallExpr = struct {
+    func: []const u8,
+    args: Span(Index(Expression)),
 };
 
-pub const UnaryOperator = struct {
-    pub const Kind = enum {
+pub const UnaryExpr = struct {
+    pub const Operation = enum {
         negate,
         not,
+        deref,
+        addr_of,
     };
 
-    op: Kind,
+    op: Operation,
     expr: Index(Expression),
 };
 
-pub const BinaryOperator = struct {
-    pub const Kind = enum {
+pub const BinaryExpr = struct {
+    pub const Operation = enum {
         /// +
         add,
         /// -
@@ -176,23 +184,23 @@ pub const BinaryOperator = struct {
         greater,
         /// >=
         greater_equal,
-        /// &
-        @"and",
-        /// ^
-        exclusive_or,
-        /// |
-        inclusive_or,
         /// &&
-        logical_and,
+        circuit_and,
         /// ||
-        logical_or,
+        circuit_or,
+        /// &
+        binary_and,
+        /// |
+        binary_or,
+        /// ^
+        binary_xor,
         /// <<
         shift_left,
         /// >>
         shift_right,
     };
 
-    op: Kind,
+    op: Operation,
     left: Index(Expression),
     right: Index(Expression),
 };

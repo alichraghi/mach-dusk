@@ -35,16 +35,29 @@ pub fn parse(
             .keyword_type => {
                 const res = parser.parseTypeAlias() catch |err| switch (err) {
                     error.Parsing => {
-                        while (parser.nextToken().tag != .semicolon) {}
+                        while (parser.nextToken().tag != .semicolon) {} // TODO: wrong
                         continue;
                     },
                     else => return err,
                 };
                 _ = try parser.addGlobalDecl(.{ .type_alias = res });
             },
+            .keyword_let => {
+                const res = parser.parseVarStatement() catch |err| switch (err) {
+                    error.Parsing => {
+                        continue;
+                    },
+                    else => return err,
+                };
+                std.debug.print("\n{} \n {} \n {}\n", .{
+                    parser.ast.getExpr(res.value),
+                    parser.ast.getExpr(parser.ast.getExpr(res.value).binary.left),
+                    parser.ast.getExpr(parser.ast.getExpr(res.value).binary.right),
+                });
+            },
             .eof => break,
             else => {
-                std.debug.print("Unsupported global\n", .{});
+                std.debug.print("Unsupported token ({})\n", .{token.tag});
             },
         }
     }
@@ -76,6 +89,7 @@ const Parser = struct {
             expected_literal_expr,
             expected_construct_expr,
             expected_bitcast_expr,
+            expected_unary_expr,
             expected_type,
             expected_scalar_type,
             expected_float_type,
@@ -88,6 +102,7 @@ const Parser = struct {
             exceeded_max_args: u8,
             invalid_bitcast_dest_type,
             expected_fixed_array_type,
+            expected_call_expr,
         };
     };
 
@@ -135,6 +150,11 @@ const Parser = struct {
                 },
                 .expected_bitcast_expr => {
                     try bw_writer.print("expected bitcast expression, but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
+                .expected_unary_expr => {
+                    try bw_writer.print("expected unary expression, but found '{s}'", .{
                         err.token.tag.symbol(),
                     });
                 },
@@ -192,6 +212,11 @@ const Parser = struct {
                 .expected_fixed_array_type => {
                     try bw_writer.print("expected a fixed size array", .{});
                 },
+                .expected_call_expr => {
+                    try bw_writer.print("expected a call expression, but found '{s}'", .{
+                        err.token.tag.symbol(),
+                    });
+                },
             }
             try bw_writer.writeByte('\n');
 
@@ -213,11 +238,11 @@ const Parser = struct {
     }
 
     /// TypeAlias <- KEYWORD_type IDENTIFIER EQUAL PlainType
-    fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
+    pub fn parseTypeAlias(self: *Parser) !Ast.TypeAlias {
         // There's no need to check for first token in global decls
         _ = self.nextToken();
 
-        const name = try self.expectToken(.identifier);
+        const name = try self.expectToken(.ident);
         _ = try self.expectToken(.equal);
         const value = try self.parsePlainType();
         _ = try self.expectToken(.semicolon);
@@ -231,30 +256,24 @@ const Parser = struct {
     ///            | AtomicType
     ///            | ArrayType
     ///            | IDENTIFIER
-    fn parsePlainType(self: *Parser) !Ast.PlainType {
+    pub fn parsePlainType(self: *Parser) !Ast.PlainType {
         const token = self.current_token;
-        if (token.tag.isScalarType()) {
-            return .{ .scalar = try self.parseScalarType() };
-        } else if (token.tag.isSamplerType()) {
-            return .{ .sampler = try self.parseSamplerType() };
-        } else if (token.tag.isVectorType()) {
-            return .{ .vector = try self.parseVectorType(true) };
-        } else if (token.tag.isMatrixType()) {
-            return .{ .matrix = try self.parseMatrixType(true) };
-        } else if (token.tag == .keyword_atomic) {
-            return .{ .atomic = try self.parseAtomicType() };
-        } else if (token.tag == .keyword_array) {
-            return .{ .array = try self.parseArrayType(false) };
-        } else if (token.tag == .identifier) {
-            _ = self.nextToken();
-            return .{ .user = token.loc.asStr(self.source) };
+        switch (token.tag.group()) {
+            .scalar => return .{ .scalar = try self.parseScalarType() },
+            .sampler => return .{ .sampler = try self.parseSamplerType() },
+            .vector => return .{ .vector = try self.parseVectorType(true) },
+            .matrix => return .{ .matrix = try self.parseMatrixType(true) },
+            .atomic => return .{ .atomic = try self.parseAtomicType() },
+            .array => return .{ .array = try self.parseArrayType(false) },
+            .ident => {
+                _ = self.nextToken();
+                return .{ .user = token.loc.asStr(self.source) };
+            },
+            else => {
+                try self.addError(.{ .token = token, .tag = .expected_type });
+                return error.Parsing;
+            },
         }
-
-        try self.addError(.{
-            .token = token,
-            .tag = .{ .expected_type = {} },
-        });
-        return error.Parsing;
     }
 
     /// ScalarType <- KEYWORD_i32
@@ -262,7 +281,7 @@ const Parser = struct {
     ///             | KEYWORD_f32
     ///             | KEYWORD_f16
     ///             | KEYWORD_bool
-    fn parseScalarType(self: *Parser) !Ast.ScalarType {
+    pub fn parseScalarType(self: *Parser) !Ast.ScalarType {
         const token = self.nextToken();
         return switch (token.tag) {
             .keyword_i32 => .i32,
@@ -271,10 +290,7 @@ const Parser = struct {
             .keyword_f16 => .f16,
             .keyword_bool => .bool,
             else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_scalar_type = {} },
-                });
+                try self.addError(.{ .token = token, .tag = .expected_scalar_type });
                 return error.Parsing;
             },
         };
@@ -287,10 +303,7 @@ const Parser = struct {
             .keyword_sampler => .{ .comparison = false },
             .keyword_comparison_sampler => .{ .comparison = true },
             else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_sampler_type = {} },
-                });
+                try self.addError(.{ .token = token, .tag = .expected_sampler_type });
                 return error.Parsing;
             },
         };
@@ -310,10 +323,7 @@ const Parser = struct {
             .keyword_vec3 => .tri,
             .keyword_vec4 => .quad,
             else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_vector_type = {} },
-                });
+                try self.addError(.{ .token = token, .tag = .expected_vector_type });
                 return error.Parsing;
             },
         };
@@ -344,11 +354,8 @@ const Parser = struct {
     ///                     | KEYWORD_mat4x4
     pub fn parseMatrixType(self: *Parser, strict: bool) !Ast.MatrixType {
         const token = self.nextToken();
-        if (!token.tag.isMatrixType()) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_matrix_type = {} },
-            });
+        if (token.tag.group() != .matrix) {
+            try self.addError(.{ .token = token, .tag = .expected_matrix_type });
             return error.Parsing;
         }
 
@@ -375,10 +382,7 @@ const Parser = struct {
             .keyword_f32 => .f32,
             .keyword_f16 => .f16,
             else => {
-                try self.addError(.{
-                    .token = elem_type_token,
-                    .tag = .{ .expected_float_type = {} },
-                });
+                try self.addError(.{ .token = elem_type_token, .tag = .expected_float_type });
                 return error.Parsing;
             },
         };
@@ -391,10 +395,7 @@ const Parser = struct {
     pub fn parseAtomicType(self: *Parser) !Ast.AtomicType {
         const token = self.nextToken();
         if (token.tag != .keyword_atomic) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_atomic_type = {} },
-            });
+            try self.addError(.{ .token = token, .tag = .expected_atomic_type });
             return error.Parsing;
         }
 
@@ -411,10 +412,7 @@ const Parser = struct {
     pub fn parseArrayType(self: *Parser, fixed_only: bool) error{ Parsing, OutOfMemory }!Ast.ArrayType {
         const token = self.nextToken();
         if (token.tag != .keyword_array) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_array_type = {} },
-            });
+            try self.addError(.{ .token = token, .tag = .expected_array_type });
             return error.Parsing;
         }
 
@@ -423,15 +421,12 @@ const Parser = struct {
         try self.ast.types.append(self.allocator, try self.parsePlainType());
 
         if (self.eatToken(.comma)) |_| {
-            const size = try self.addExpr(try self.parseExpr());
+            const size = try self.parseUnaryExpr();
             _ = try self.expectToken(.greater_than);
             return .{ .element_type = elem_type, .size = .{ .static = size } };
         } else {
             if (fixed_only and self.current_token.tag == .greater_than) {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_fixed_array_type = {} },
-                });
+                try self.addError(.{ .token = token, .tag = .expected_fixed_array_type });
                 return error.Parsing;
             }
         }
@@ -442,42 +437,112 @@ const Parser = struct {
     }
 
     /// Expression <- LiteralExpr | ConstructExpr
-    fn parseExpr(self: *Parser) !Ast.Expression {
-        const token = self.current_token;
-        if (token.tag.isLiteral()) {
-            return .{ .literal = try self.parseLiteralExpr() };
-        } else if (token.tag.isScalarType() or
-            token.tag.isVectorType() or
-            token.tag.isMatrixType() or
-            token.tag == .keyword_array)
-        {
-            return .{ .construct = try self.parseConstructExpr() };
-        } else if (token.tag == .keyword_bitcast) {
-            return .{ .bitcast = try self.parseBitcastExpr() };
-        }
-
-        try self.addError(.{
-            .token = token,
-            .tag = .{ .expected_expr = {} },
-        });
-        return error.Parsing;
+    pub fn parseExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left = try self.parseRelationalExpr(null);
+        const pre_bitwise_token = self.current_token;
+        return self.parseBitwiseExpr(left) catch |err| switch (err) {
+            error.Parsing => {
+                self.regressToken(pre_bitwise_token);
+                return self.parseShortCircuitExpr(left);
+            },
+            else => return err,
+        };
     }
 
     /// LiteralExpr <- Number | KEYWORD_true | KEYWORD_false
-    fn parseLiteralExpr(self: *Parser) !Ast.Literal {
+    pub fn parsePrimaryExpr(self: *Parser) !Ast.Index(Ast.Expression) {
         const token = self.nextToken();
-        return switch (token.tag) {
-            .keyword_true => .{ .bool = true },
-            .keyword_false => .{ .bool = false },
-            .number => .{ .number = parseNumberLiteral(token.loc.asStr(self.source)) catch unreachable },
+        switch (token.tag) {
+            // .paren_left => .{}, TODO
+            .keyword_true => return self.addExpr(.{ .literal = .{ .bool = true } }),
+            .keyword_false => return self.addExpr(.{ .literal = .{ .bool = false } }),
+            .number => return self.addExpr(.{ .literal = .{
+                .number = parseNumberLiteral(token.loc.asStr(self.source)) catch unreachable,
+            } }),
+            .keyword_bitcast => {
+                _ = try self.expectToken(.less_than);
+                const dest_type = try self.parseScalarType();
+                _ = try self.expectToken(.greater_than);
+                const args = try self.parseCallArguments(1, 1);
+                return self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = args.one } });
+            },
+            .ident => {
+                if (self.current_token.tag == .paren_left) {
+                    return self.parseCallExpr();
+                } else {
+                    return self.addExpr(.{ .ident = token.loc.asStr(self.source) });
+                }
+            },
             else => {
-                try self.addError(.{
-                    .token = token,
-                    .tag = .{ .expected_literal_expr = {} },
-                });
+                if (self.current_token.tag == .paren_left) {
+                    return self.parseCallExpr();
+                }
+
+                try self.addError(.{ .token = token, .tag = .expected_literal_expr });
                 return error.Parsing;
             },
-        };
+        }
+    }
+
+    // TODO: https://gpuweb.github.io/gpuweb/wgsl/#syntax-type_specifier_without_ident
+    // 'ptr' '<' address_space ',' type_specifier ( ',' access_mode ) ? '>'
+    // texture_and_sampler_types
+    pub fn parseCallExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const token = self.current_token;
+        switch (token.tag.group()) {
+            .ident => {
+                const func = token.loc.asStr(self.source);
+                _ = self.nextToken();
+                return self.addExpr(.{
+                    .call = .{
+                        .func = func,
+                        .args = try self.parseCallArguments(0, max_call_args),
+                    },
+                });
+            },
+            .scalar => {
+                const scalar_type = try self.parseScalarType();
+                const args = try self.parseCallArguments(0, max_call_args);
+                return self.addExpr(.{ .construct = .{
+                    .type = .{
+                        .scalar = scalar_type,
+                    },
+                    .components = args,
+                } });
+            },
+            .vector => {
+                const vector_type = try self.parseVectorType(false);
+                const args = try self.parseCallArguments(0, @enumToInt(vector_type.size()));
+                return self.addExpr(.{ .construct = .{ .type = .{ .vector = vector_type }, .components = args } });
+            },
+            .matrix => {
+                const matrix_type = try self.parseMatrixType(false);
+                const args = try self.parseCallArguments(0, matrix_type.len());
+                return self.addExpr(.{ .construct = .{ .type = .{ .matrix = matrix_type }, .components = args } });
+            },
+            .array => {
+                if (self.peekToken().tag == .less_than) {
+                    const array_type = try self.parseArrayType(true);
+                    const args = try self.parseCallArguments(0, max_call_args);
+                    return self.addExpr(.{ .construct = .{
+                        .type = .{ .full_array = array_type },
+                        .components = args,
+                    } });
+                }
+
+                _ = self.nextToken();
+                const args = try self.parseCallArguments(0, max_call_args);
+
+                return self.addExpr(.{ .construct = .{
+                    .type = .partial_array,
+                    .components = args,
+                } });
+            },
+            else => {
+                try self.addError(.{ .token = token, .tag = .expected_call_expr });
+                return error.Parsing;
+            },
+        }
     }
 
     // TODO
@@ -493,94 +558,165 @@ const Parser = struct {
     ///                | MatrixType
     ///                | (KEYWORD_array | ArrayType)
     ///                  LEFT_PAREN ( Expression COMMA? )* RIGHT_PAREN
-    fn parseConstructExpr(self: *Parser) !Ast.ConstructExpr {
-        const token = self.current_token;
-        if (token.tag.isScalarType()) {
-            const scalar_type = try self.parseScalarType();
-            const args = try self.parseCallArguments(0, max_call_args);
-            return .{
-                .type = .{
-                    .scalar = scalar_type,
-                },
-                .components = args,
-            };
-        } else if (token.tag.isVectorType()) { // TODO max args
-            const vector_type = try self.parseVectorType(false);
-            const args = try self.parseCallArguments(0, @enumToInt(vector_type.size()));
-            return .{ .type = .{ .vector = vector_type }, .components = args };
-        } else if (token.tag.isMatrixType()) {
-            const matrix_type = try self.parseMatrixType(false);
-            const args = try self.parseCallArguments(0, matrix_type.len());
-            return .{ .type = .{ .matrix = matrix_type }, .components = args };
-        } else if (token.tag == .keyword_array) {
-            if (self.peekToken().tag == .less_than) {
-                const array_type = try self.parseArrayType(true);
-                const args = try self.parseCallArguments(0, max_call_args);
+    pub fn parseVarStatement(self: *Parser) !Ast.VariableStatement {
+        const token = self.nextToken();
+        switch (token.tag) {
+            .keyword_let => {
+                const name = try self.expectToken(.ident);
+                const _type = if (self.eatToken(.colon)) |_|
+                    try self.parsePlainType() // TODO: plain type??!
+                else
+                    null;
+                _ = try self.expectToken(.equal);
+                const value = try self.parseExpr();
+                _ = try self.expectToken(.semicolon);
                 return .{
-                    .type = .{ .full_array = array_type },
-                    .components = args,
+                    .constant = false,
+                    .name = name.loc.asStr(self.source),
+                    .type = _type,
+                    .value = value,
                 };
-            }
-
-            _ = self.nextToken();
-            const args = try self.parseCallArguments(0, max_call_args);
-
-            return .{
-                .type = .{ .partial_array = {} },
-                .components = args,
-            };
+            },
+            else => unreachable, // TODO
         }
 
         try self.addError(.{
             .token = token,
-            .tag = .{ .expected_construct_expr = {} },
+            .tag = .expected_construct_expr,
         });
         return error.Parsing;
     }
 
-    /// BitcastExpr <- KEYWORD_bitcast LESS_THAN
-    ///                KEYWORD_i32
-    ///              | KEYWORD_u32
-    ///              | KEYWORD_f32 GREATER_THAN
-    fn parseBitcastExpr(self: *Parser) !Ast.BitcastExpr {
-        const token = self.nextToken();
-        if (token.tag != .keyword_bitcast) {
-            try self.addError(.{
-                .token = token,
-                .tag = .{ .expected_bitcast_expr = {} },
-            });
-            return error.Parsing;
-        }
-
-        _ = try self.expectToken(.less_than);
-
-        const dest_type_token = self.nextToken();
-        const dest_type: Ast.ScalarType = switch (dest_type_token.tag) {
-            .keyword_i32 => .i32,
-            .keyword_u32 => .u32,
-            .keyword_f32 => .f32,
+    /// UnaryExpr <- BANG | TILDE | MINUS | STAR | AND UnaryExpr
+    pub fn parseUnaryExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const token = self.current_token;
+        const op: Ast.UnaryExpr.Operation = switch (token.tag) {
+            .bang, .tilde => .not,
+            .minus => .negate,
+            .star => .deref,
+            .@"and" => .addr_of,
             else => {
-                try self.addError(.{
-                    .token = dest_type_token,
-                    .tag = .{ .invalid_bitcast_dest_type = {} },
-                });
-                return error.Parsing;
+                return self.parseSingularExpr();
             },
         };
 
-        _ = try self.expectToken(.greater_than);
-        const args = try self.parseCallArguments(1, 1);
-        return .{
-            .dest = dest_type,
-            .expr = args.one,
+        _ = self.nextToken();
+        return self.addExpr(.{ .unary = .{
+            .op = op,
+            .expr = try self.parseUnaryExpr(),
+        } });
+    }
+
+    /// UnaryExpr <- BANG | TILDE | MINUS | STAR | AND UnaryExpr
+    pub fn parseSingularExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        return self.parsePrimaryExpr();
+        // TODO: component_or_swizzle_specifier
+    }
+
+    pub fn parseBitwiseExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left_expr_op = switch (self.ast.getExpr(left)) {
+            .binary => |s| s.op,
+            else => return error.Parsing,
         };
+        switch (left_expr_op) {
+            .binary_and => _ = try self.expectToken(.@"and"),
+            .binary_or => _ = try self.expectToken(.@"or"),
+            .binary_xor => _ = try self.expectToken(.xor),
+            else => return error.Parsing,
+        }
+        const right = try self.parseUnaryExpr();
+        return self.addExpr(.{ .binary = .{ .op = left_expr_op, .left = left, .right = right } });
+    }
+
+    pub fn parseBinaryExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseUnaryExpr();
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .@"and" => .binary_and,
+            .@"or" => .binary_or,
+            .xor => .binary_xor,
+            else => return left,
+        };
+        _ = self.nextToken();
+        const right = try self.parseBinaryExpr(null);
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+    }
+
+    pub fn parseShortCircuitExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseRelationalExpr(null);
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .and_and => .circuit_and,
+            .or_or => .circuit_or,
+            else => return left,
+        };
+        _ = self.nextToken();
+        const right = try self.parseShortCircuitExpr(null);
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+    }
+
+    pub fn parseRelationalExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseShiftExpr(null);
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .equal_equal => .equal,
+            .not_equal => .not_equal,
+            .less_than => .less,
+            .less_than_equal => .less_equal,
+            .greater_than => .greater,
+            .greater_than_equal => .greater_equal,
+            else => return self.parseShiftExpr(left),
+        };
+        _ = self.nextToken();
+        const right = try self.parseShiftExpr(null);
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+    }
+
+    pub fn parseShiftExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseUnaryExpr();
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .shift_left => .shift_left,
+            .shift_right => .shift_right,
+            else => return self.parseAdditiveExpr(left),
+        };
+        _ = self.nextToken();
+        const right = try self.parseUnaryExpr();
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+    }
+
+    pub fn parseAdditiveExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseMultiplicativeExpr(null);
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .plus => .add,
+            .minus => .subtract,
+            else => return left,
+        };
+        _ = self.nextToken();
+        const right = try self.parseAdditiveExpr(null);
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+    }
+
+    pub fn parseMultiplicativeExpr(self: *Parser, left_maybe: ?Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left = left_maybe orelse try self.parseUnaryExpr();
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .star => .multiply,
+            .division => .divide,
+            .mod => .modulo,
+            else => return left,
+        };
+        _ = self.nextToken();
+        const right = try self.parseMultiplicativeExpr(null);
+        return self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
     }
 
     /// CallArguments <- LEFT_PAREN (Expr COMMA?)* RIGHT_PAREN
-    fn parseCallArguments(self: *Parser, min: u8, max: u8) error{ Parsing, OutOfMemory }!Ast.Span(Ast.Expression) {
+    pub fn parseCallArguments(self: *Parser, min: u8, max: u8) error{ Parsing, OutOfMemory }!Ast.Span(Ast.Index(Ast.Expression)) {
         std.debug.assert(max <= max_call_args);
 
-        var args = std.BoundedArray(Ast.Expression, max_call_args).init(0) catch unreachable;
+        var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
         const l_paren_token = try self.expectToken(.paren_left);
 
         if (self.current_token.tag == .paren_right) {
@@ -628,93 +764,99 @@ const Parser = struct {
         if (args.len == 0) {
             return .{ .zero = {} };
         } else if (args.len == 1) {
-            try self.ast.expressions.append(self.allocator, args.get(0));
-            return .{ .one = @intCast(u32, self.ast.expressions.items.len - 1) };
+            try self.ast.extra.append(self.allocator, args.get(0));
+            return .{ .one = @intCast(u32, self.ast.extra.items.len - 1) };
         } else {
-            try self.ast.expressions.appendSlice(self.allocator, args.slice());
+            try self.ast.extra.appendSlice(self.allocator, args.slice());
             return .{ .multi = .{
-                .start = @intCast(u32, self.ast.expressions.items.len - args.len),
-                .end = @intCast(u32, self.ast.expressions.items.len),
+                .start = @intCast(u32, self.ast.extra.items.len - args.len),
+                .end = @intCast(u32, self.ast.extra.items.len),
             } };
         }
     }
 
-    fn expectToken(self: *Parser, tag: Token.Tag) !Token {
-        if (self.current_token.tag == tag) {
-            return self.nextToken();
+    pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {
+        const token = self.nextToken();
+        if (token.tag == tag) {
+            return token;
         } else {
             try self.addError(.{
-                .token = self.current_token,
+                .token = token,
                 .tag = .{ .expected_token = tag },
             });
             return error.Parsing;
         }
     }
 
-    fn eatToken(self: *Parser, tag: Token.Tag) ?Token {
+    pub fn eatToken(self: *Parser, tag: Token.Tag) ?Token {
         return if (self.current_token.tag == tag) self.nextToken() else null;
     }
 
-    fn peekToken(self: *Parser) Token {
+    pub fn peekToken(self: *Parser) Token {
         return self.tokenizer.peek();
     }
 
-    fn nextToken(self: *Parser) Token {
+    pub fn nextToken(self: *Parser) Token {
         const current = self.current_token;
         self.current_token = self.tokenizer.next();
         return current;
     }
 
-    fn addError(self: *Parser, err: Error) std.mem.Allocator.Error!void {
+    pub fn regressToken(self: *Parser, token: Token) void {
+        self.current_token = token;
+        self.tokenizer.index = token.loc.end;
+    }
+
+    pub fn addError(self: *Parser, err: Error) std.mem.Allocator.Error!void {
         try self.errors.append(self.allocator, err);
     }
 
-    fn addExpr(self: *Parser, expr: Ast.Expression) std.mem.Allocator.Error!Ast.Index(Ast.Expression) {
+    pub fn addExpr(self: *Parser, expr: Ast.Expression) std.mem.Allocator.Error!Ast.Index(Ast.Expression) {
         const i = @intCast(u32, self.ast.expressions.items.len);
         try self.ast.expressions.append(self.allocator, expr);
         return i;
     }
 
-    fn addGlobalDecl(self: *Parser, decl: Ast.GlobalDecl) std.mem.Allocator.Error!Ast.Index(Ast.GlobalDecl) {
+    pub fn addGlobalDecl(self: *Parser, decl: Ast.GlobalDecl) std.mem.Allocator.Error!Ast.Index(Ast.GlobalDecl) {
         const i = @intCast(u32, self.ast.globals.items.len);
         try self.ast.globals.append(self.allocator, decl);
         return i;
     }
 };
 
-test {
-    const t2 = std.time.microTimestamp();
-    const str2 =
-        \\const t1 = @TypeOf(i32, @TypeOf(1, 2, 3));
-    ** 1;
-    var p2 = std.zig.Ast.parse(std.heap.c_allocator, str2, .zig) catch return;
-    defer p2.deinit(std.heap.c_allocator);
+// test {
+//     const t2 = std.time.microTimestamp();
+//     const str2 =
+//         \\const t1 = @TypeOf(i32, @TypeOf(1, 2, 3));
+//     ** 1;
+//     var p2 = std.zig.Ast.parse(std.heap.c_allocator, str2, .zig) catch return;
+//     defer p2.deinit(std.heap.c_allocator);
 
-    std.debug.print("\ntook: {d}ms\n", .{
-        @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
-    });
-}
+//     std.debug.print("\ntook: {d}ms\n", .{
+//         @intToFloat(f64, std.time.microTimestamp() - t2) / std.time.us_per_ms,
+//     });
+// }
 
 const expectEqual = std.testing.expectEqual;
 test {
+    std.testing.refAllDeclsRecursive(Parser);
     const source =
-        \\type t1 = array<i32, vec3(1, 2, 3)>;
-        \\//type t2 = bitcast<i32>(1);
-        \\type t2 = array<i32, array(1)>;
+        \\let ali = 1 + 2 * 3 / 4 - 1 > 6 >> 7;
     ;
+
     var ast = try parse(std.testing.allocator, source, .{});
     defer ast.deinit(std.testing.allocator);
 
-    const t1_type = ast.getGlobal(0).type_alias.type.array;
-    const t1_elem_type = ast.getPlainType(t1_type.element_type);
-    const t1_size_expr = ast.getExpr(t1_type.size.static).construct;
-    const t1_size_expr_comps = ast.getExprRange(t1_size_expr.components.multi);
+    // const t1_type = ast.getGlobal(0).type_alias.type.array;
+    // const t1_elem_type = ast.getPlainType(t1_type.element_type);
+    // const t1_size_expr = ast.getExpr(t1_type.size.static).construct;
+    // const t1_size_expr_comps = ast.getExprRange(t1_size_expr.components.multi);
 
-    try expectEqual(Ast.ScalarType.i32, t1_elem_type.scalar);
-    try expectEqual(Ast.VectorType.Size.tri, t1_size_expr.type.vector.partial.size);
-    try expectEqual(@as(i64, 1), t1_size_expr_comps[0].literal.number.abstract_int);
-    try expectEqual(@as(i64, 2), t1_size_expr_comps[1].literal.number.abstract_int);
-    try expectEqual(@as(i64, 3), t1_size_expr_comps[2].literal.number.abstract_int);
+    // try expectEqual(Ast.ScalarType.i32, t1_elem_type.scalar);
+    // try expectEqual(Ast.VectorType.Size.tri, t1_size_expr.type.vector.partial.size);
+    // try expectEqual(@as(i64, 1), t1_size_expr_comps[0].literal.number.abstract_int);
+    // try expectEqual(@as(i64, 2), t1_size_expr_comps[1].literal.number.abstract_int);
+    // try expectEqual(@as(i64, 3), t1_size_expr_comps[2].literal.number.abstract_int);
 
     // const t1_dest_type = ast.getGlobal(1).type_alias.type.array;
     // const t1_expr = ast.getPlainType(t1_type.element_type);

@@ -9,7 +9,7 @@ index: u32,
 const State = enum {
     start,
     invalid,
-    identifier,
+    ident,
     underscore,
     number,
     block_comment,
@@ -68,7 +68,7 @@ pub fn peek(self: *Tokenizer) Token {
                     break;
                 },
                 ' ', '\n', '\t', '\r' => result.loc.start = index + 1,
-                'a'...'z', 'A'...'Z' => state = .identifier,
+                'a'...'z', 'A'...'Z' => state = .ident,
                 '0'...'9' => state = .number,
 
                 '&' => state = .ampersand,
@@ -153,10 +153,10 @@ pub fn peek(self: *Tokenizer) Token {
             },
             .invalid => break,
 
-            .identifier => switch (c) {
+            .ident => switch (c) {
                 'a'...'z', 'A'...'Z', '0'...'9', '_' => {},
                 else => {
-                    result.tag = .identifier;
+                    result.tag = .ident;
                     if (Token.keywords.get(self.source[result.loc.start..index])) |tag| {
                         result.tag = tag;
                     }
@@ -164,7 +164,7 @@ pub fn peek(self: *Tokenizer) Token {
                 },
             },
             .underscore => switch (c) { // TODO: two underscore `__` https://www.w3.org/TR/WGSL/#identifiers
-                'a'...'z', 'A'...'Z', '_', '0'...'9' => state = .identifier,
+                'a'...'z', 'A'...'Z', '_', '0'...'9' => state = .ident,
                 else => {
                     result.tag = .underscore;
                     break;
@@ -391,9 +391,9 @@ test "tokenize identifier and numbers" {
     ;
     var tokenizer = Tokenizer.init(str);
     try std.testing.expect(tokenizer.next().tag == .underscore);
-    try std.testing.expect(tokenizer.next().tag == .identifier);
-    try std.testing.expect(tokenizer.next().tag == .identifier);
-    try std.testing.expect(tokenizer.next().tag == .identifier);
+    try std.testing.expect(tokenizer.next().tag == .ident);
+    try std.testing.expect(tokenizer.next().tag == .ident);
+    try std.testing.expect(tokenizer.next().tag == .ident);
     try std.testing.expect(tokenizer.next().tag == .number);
     try std.testing.expect(tokenizer.next().tag == .eof);
 }

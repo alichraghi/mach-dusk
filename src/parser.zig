@@ -69,7 +69,7 @@ const Parser = struct {
 
         const name = self.expectToken(.ident) orelse return null;
         _ = self.expectToken(.equal) orelse return null;
-        const value = try self.expectTypeSpecifier() orelse return null;
+        const value = try self.typeSpecifier(true) orelse return null;
         _ = self.expectToken(.semicolon) orelse return null;
 
         return .{ .name = name.loc.asStr(self.source), .type = value };
@@ -81,18 +81,10 @@ const Parser = struct {
                 _ = self.next();
 
                 const name = self.expectToken(.ident) orelse return null;
-                const _type = if (self.eatToken(.colon)) |_| blk: {
-                    const type_token = self.current_token;
-                    break :blk try self.typeSpecifier() orelse {
-                        self.addError(
-                            type_token.loc,
-                            "expected type sepecifier, but found '{s}'",
-                            .{type_token.tag.symbol()},
-                            &.{},
-                        );
-                        return null;
-                    };
-                } else null;
+                const _type = if (self.eatToken(.colon)) |_|
+                    try self.typeSpecifier(true) orelse return null
+                else
+                    null;
                 _ = self.expectToken(.equal) orelse return null;
                 const value = try self.expression() orelse return null;
                 _ = self.expectToken(.semicolon) orelse return null;
@@ -110,44 +102,30 @@ const Parser = struct {
         }
     }
 
-    pub fn expectTypeSpecifier(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Type) {
-        return try self.typeSpecifier() orelse {
-            self.addError(
-                self.current_token.loc,
-                "expected type sepecifier, found '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return null;
-        };
-    }
-
-    pub fn typeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
+    pub fn typeSpecifier(self: *Parser, expect: bool) !?Ast.Index(Ast.Type) {
         if (self.current_token.tag == .ident) {
             _ = self.next();
             return try self.addType(.{ .user = self.current_token.loc.asStr(self.source) });
         }
-        return self.typeSpecifierWithoutIdent();
+        return self.typeSpecifierWithoutIdent(expect);
     }
 
-    pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Index(Ast.Type) {
-        const token = self.current_token;
-
+    pub fn typeSpecifierWithoutIdent(self: *Parser, expect: bool) !?Ast.Index(Ast.Type) {
         if (self.vectorPrefix()) |vec| {
             _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.expectTypeSpecifier() orelse return null;
+            const elem_type = try self.typeSpecifier(true) orelse return null;
             _ = self.expectToken(.greater_than) orelse return null;
             return try self.addType(.{ .vector = .{ .prefix = vec, .element = elem_type } });
         }
 
         if (self.matrixPrefix()) |mat| {
             _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.expectTypeSpecifier() orelse return null;
+            const elem_type = try self.typeSpecifier(true) orelse return null;
             _ = self.expectToken(.greater_than) orelse return null;
             return try self.addType(.{ .matrix = .{ .prefix = mat, .element = elem_type } });
         }
 
-        switch (token.tag) {
+        switch (self.current_token.tag) {
             .keyword_i32 => {
                 _ = self.next();
                 return try self.addType(.{ .scalar = .i32 });
@@ -179,14 +157,14 @@ const Parser = struct {
             .keyword_atomic => {
                 _ = self.next();
                 _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.expectTypeSpecifier() orelse return null;
+                const elem_type = try self.typeSpecifier(true) orelse return null;
                 _ = self.expectToken(.greater_than) orelse return null;
                 return try self.addType(.{ .atomic = .{ .element = elem_type } });
             },
             .keyword_array => {
                 _ = self.next();
                 _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.expectTypeSpecifier() orelse return null;
+                const elem_type = try self.typeSpecifier(true) orelse return null;
                 if (self.eatToken(.comma)) |_| {
                     const expr_token = self.current_token;
                     const size = try self.elementCountExpr() orelse {
@@ -212,7 +190,7 @@ const Parser = struct {
                 _ = self.expectToken(.less_than) orelse return null;
                 const addr_space = self.expectAddressSpace() orelse return null;
                 _ = self.expectToken(.comma) orelse return null;
-                const ty = try self.expectTypeSpecifier() orelse return null;
+                const ty = try self.typeSpecifier(true) orelse return null;
                 if (self.eatToken(.comma)) |_| {
                     const access_mode = self.expectAccessMode() orelse return null;
                     _ = self.expectToken(.greater_than) orelse return null;
@@ -229,7 +207,17 @@ const Parser = struct {
                     .access = null,
                 } });
             },
-            else => return null,
+            else => {
+                if (expect) {
+                    self.addError(
+                        self.current_token.loc,
+                        "expected type sepecifier, found '{s}'",
+                        .{self.current_token.tag.symbol()},
+                        &.{},
+                    );
+                }
+                return null;
+            },
         }
     }
 
@@ -345,12 +333,12 @@ const Parser = struct {
             },
             .keyword_bitcast => {
                 _ = self.expectToken(.less_than) orelse return null;
-                const dest_type = try self.expectTypeSpecifier() orelse return null;
+                const dest_type = try self.typeSpecifier(true) orelse return null;
                 _ = self.expectToken(.greater_than) orelse return null;
                 const args = try self.expectParenExpr() orelse return null;
                 return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = args } });
             },
-            .paren_left => return try self.expectParenExpr() orelse return null,
+            .paren_left => return self.expectParenExpr(),
             .ident => {
                 if (self.peek().tag == .paren_left) {
                     const args = try self.expectArgumentExpressionList() orelse return null;
@@ -383,7 +371,7 @@ const Parser = struct {
     pub fn callable(self: *Parser) error{OutOfMemory}!?Ast.CallExpr.Callable {
         const start_token = self.current_token;
 
-        if (try self.typeSpecifierWithoutIdent()) |ty_i| {
+        if (try self.typeSpecifierWithoutIdent(false)) |ty_i| {
             switch (self.ast.getType(ty_i)) {
                 .scalar => |p| return .{ .scalar = p },
                 .vector => |p| return .{ .vector = p },
@@ -634,7 +622,6 @@ const Parser = struct {
             else => return ret,
         };
 
-        var ret_result = ret;
         while (true) {
             const token = self.current_token;
             if (token.tag != op_token.tag) break;
@@ -650,10 +637,10 @@ const Parser = struct {
                 return null;
             };
 
-            ret_result = try self.addExpr(.{ .binary = .{ .op = op, .left = ret, .right = right } });
+            ret = try self.addExpr(.{ .binary = .{ .op = op, .left = ret, .right = right } });
         }
 
-        return ret_result;
+        return ret;
     }
 
     pub fn expectToken(self: *Parser, tag: Token.Tag) ?Token {
@@ -740,7 +727,7 @@ const Parser = struct {
 
         // error line
         term.setColor(b, .Dim) catch unreachable;
-        b.print("{d} ╎ ", .{loc_extra.line}) catch unreachable;
+        b.print("{d} │ ", .{loc_extra.line}) catch unreachable;
         term.setColor(b, .Reset) catch unreachable;
         b.writeAll(self.source[loc_extra.line_start..loc_extra.line_end]) catch unreachable;
         b.writeByte('\n') catch unreachable;
@@ -756,11 +743,10 @@ const Parser = struct {
 
         // notes
         for (notes) |note| {
-            // 'note: '
             term.setColor(b, .Cyan) catch unreachable;
             b.writeAll("note: ") catch unreachable;
 
-            // note
+            // note message
             term.setColor(b, .Reset) catch unreachable;
             term.setColor(b, .Bold) catch unreachable;
             b.writeAll(note) catch unreachable;
@@ -785,7 +771,7 @@ test {
     std.testing.refAllDeclsRecursive(Parser);
     const source =
         \\let ali = 1 + 5 + 2 * 3 > 6 >> 7;
-        \\type ali = ptr<functiond, f32, read>;
+        \\type ali = ptr<function, f32, read>;
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

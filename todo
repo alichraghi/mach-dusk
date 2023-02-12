@@ -1,4 +1,14 @@
-parseElementCountExpr
-remove Span
 always back to start token on error?
 token error before parse or current_token??
+
+
+:2:16 error: expected address space, found 'an identifier'
+2 ╎ type ali = ptr<functiond, f32, read>;
+                   ^
+note: must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'
+
+:2:16 error: expected type sepecifier, found 'an identifier'
+2 ╎ type ali = ptr<functiond, f32, read>;
+
+
+back expect?

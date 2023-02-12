@@ -25,21 +25,18 @@ pub fn parse(
     try parser.ast.globals.ensureTotalCapacityPrecise(allocator, source.len / 300); // 1:300 source to globals
     try parser.ast.expressions.ensureTotalCapacityPrecise(allocator, source.len / 10); // 1:10 source to expressions
 
-    var failed = false;
     while (true) {
         const token = parser.current_token;
         switch (token.tag) {
             .keyword_type => {
                 const res = try parser.typeAlias() orelse {
-                    failed = true;
                     parser.continueUntilOrEOF(.semicolon);
                     continue;
                 };
                 _ = try parser.addGlobalDecl(.{ .type_alias = res });
             },
             .keyword_let => {
-                const res = try parser.parseVarStatement() orelse {
-                    failed = true;
+                const res = try parser.varStatement() orelse {
                     parser.continueUntilOrEOF(.semicolon);
                     continue;
                 };
@@ -52,7 +49,7 @@ pub fn parse(
         }
     }
 
-    if (failed) return error.Parsing;
+    if (parser.failed) return error.Parsing;
 
     return parser.ast;
 }
@@ -63,11 +60,11 @@ const Parser = struct {
     tokenizer: Tokenizer,
     current_token: Token,
     error_file: std.fs.File,
-    error_lock: bool = false,
+    failed: bool = false,
     ast: Ast = .{},
 
     pub fn typeAlias(self: *Parser) !?Ast.TypeAlias {
-        // There's no need to check for first token in global decls
+        if (self.current_token.tag != .keyword_type) return null;
         _ = self.next();
 
         const name = self.expectToken(.ident) orelse return null;
@@ -76,6 +73,41 @@ const Parser = struct {
         _ = self.expectToken(.semicolon) orelse return null;
 
         return .{ .name = name.loc.asStr(self.source), .type = value };
+    }
+
+    pub fn varStatement(self: *Parser) !?Ast.VariableStatement {
+        switch (self.current_token.tag) {
+            .keyword_let => {
+                _ = self.next();
+
+                const name = self.expectToken(.ident) orelse return null;
+                const _type = if (self.eatToken(.colon)) |_| blk: {
+                    const type_token = self.current_token;
+                    break :blk try self.typeSpecifier() orelse {
+                        self.addError(
+                            type_token.loc,
+                            "expected type sepecifier, but found '{s}'",
+                            .{type_token.tag.symbol()},
+                            &.{},
+                        );
+                        return null;
+                    };
+                } else null;
+                _ = self.expectToken(.equal) orelse return null;
+                const value = try self.expression() orelse return null;
+                _ = self.expectToken(.semicolon) orelse return null;
+                return .{
+                    .constant = false,
+                    .name = name.loc.asStr(self.source),
+                    .type = _type,
+                    .value = value,
+                };
+            },
+
+            // TODO
+
+            else => return null,
+        }
     }
 
     pub fn expectTypeSpecifier(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Type) {
@@ -152,6 +184,7 @@ const Parser = struct {
                 return try self.addType(.{ .atomic = .{ .element = elem_type } });
             },
             .keyword_array => {
+                _ = self.next();
                 _ = self.expectToken(.less_than) orelse return null;
                 const elem_type = try self.expectTypeSpecifier() orelse return null;
                 if (self.eatToken(.comma)) |_| {
@@ -174,15 +207,30 @@ const Parser = struct {
                 _ = self.expectToken(.greater_than) orelse return null;
                 return try self.addType(.{ .array = .{ .element = elem_type, .size = .dynamic } });
             },
+            .keyword_ptr => {
+                _ = self.next();
+                _ = self.expectToken(.less_than) orelse return null;
+                const addr_space = self.expectAddressSpace() orelse return null;
+                _ = self.expectToken(.comma) orelse return null;
+                const ty = try self.expectTypeSpecifier() orelse return null;
+                if (self.eatToken(.comma)) |_| {
+                    const access_mode = self.expectAccessMode() orelse return null;
+                    _ = self.expectToken(.greater_than) orelse return null;
+                    return try self.addType(.{ .ptr = .{
+                        .addr_space = addr_space,
+                        .type = ty,
+                        .access = access_mode,
+                    } });
+                }
+                _ = self.expectToken(.greater_than) orelse return null;
+                return try self.addType(.{ .ptr = .{
+                    .addr_space = addr_space,
+                    .type = ty,
+                    .access = null,
+                } });
+            },
             else => return null,
         }
-    }
-
-    pub fn elementCountExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left = try self.unaryExpr() orelse return null;
-        _ = left;
-        // TODO
-        return null;
     }
 
     pub fn vectorPrefix(self: *Parser) ?Ast.Type.Vector.Prefix {
@@ -213,6 +261,60 @@ const Parser = struct {
         return res;
     }
 
+    pub fn expectAddressSpace(self: *Parser) ?Ast.AddressSpace {
+        if (self.current_token.tag == .ident) {
+            const str = self.current_token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "function", str)) {
+                _ = self.next();
+                return .function;
+            } else if (std.mem.eql(u8, "private", str)) {
+                _ = self.next();
+                return .private;
+            } else if (std.mem.eql(u8, "workgroup", str)) {
+                _ = self.next();
+                return .workgroup;
+            } else if (std.mem.eql(u8, "uniform", str)) {
+                _ = self.next();
+                return .uniform;
+            } else if (std.mem.eql(u8, "storage", str)) {
+                _ = self.next();
+                return .storage;
+            }
+        }
+
+        self.addError(
+            self.current_token.loc,
+            "expected address space, found '{s}'",
+            .{self.current_token.tag.symbol()},
+            &.{"must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'"},
+        );
+        return null;
+    }
+
+    pub fn expectAccessMode(self: *Parser) ?Ast.AccessMode {
+        if (self.current_token.tag == .ident) {
+            const str = self.current_token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "read", str)) {
+                _ = self.next();
+                return .read;
+            } else if (std.mem.eql(u8, "write", str)) {
+                _ = self.next();
+                return .write;
+            } else if (std.mem.eql(u8, "read_write", str)) {
+                _ = self.next();
+                return .read_write;
+            }
+        }
+
+        self.addError(
+            self.current_token.loc,
+            "expected access mode, found '{s}'",
+            .{self.current_token.tag.symbol()},
+            &.{"must be one of 'read', 'write', 'read_write'"},
+        );
+        return null;
+    }
+
     pub fn primaryExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
         const start_token = self.current_token;
 
@@ -238,7 +340,7 @@ const Parser = struct {
             .number => {
                 _ = self.next();
                 return try self.addExpr(.{ .literal = .{
-                    .number = parseNumberLiteral(token.loc.asStr(self.source)) catch unreachable,
+                    .number = numberLiteral(token.loc.asStr(self.source)) catch unreachable,
                 } });
             },
             .keyword_bitcast => {
@@ -302,8 +404,7 @@ const Parser = struct {
         return null;
     }
 
-    // TODO
-    pub fn expectArgumentExpressionList(self: *Parser) error{OutOfMemory}!?Ast.Span(Ast.Index(Ast.Expression)) {
+    pub fn expectArgumentExpressionList(self: *Parser) error{OutOfMemory}!?Ast.Range(Ast.Index(Ast.Expression)) {
         var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
         _ = self.expectToken(.paren_left) orelse return null;
         while (true) {
@@ -322,16 +423,25 @@ const Parser = struct {
         }
         _ = self.expectToken(.paren_right) orelse return null;
 
-        if (args.len == 1) {
-            try self.ast.extra.append(self.allocator, args.get(0));
-            return .{ .one = @intCast(u32, self.ast.extra.items.len - 1) };
-        } else {
-            try self.ast.extra.appendSlice(self.allocator, args.slice());
-            return .{ .multi = .{
-                .start = @intCast(u32, self.ast.extra.items.len - args.len),
-                .end = @intCast(u32, self.ast.extra.items.len),
-            } };
+        try self.ast.extra.appendSlice(self.allocator, args.slice());
+        return .{
+            .start = @intCast(u32, self.ast.extra.items.len - args.len),
+            .end = @intCast(u32, self.ast.extra.items.len),
+        };
+    }
+
+    pub fn elementCountExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
+        const left = try self.unaryExpr() orelse return null;
+
+        if (try self.bitwiseExpr(left)) |right| {
+            return right;
         }
+
+        if (try self.expectMathExpr(left)) |right| {
+            return right;
+        }
+
+        return null;
     }
 
     pub fn unaryExpr(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Expression) {
@@ -546,40 +656,6 @@ const Parser = struct {
         return ret_result;
     }
 
-    pub fn parseVarStatement(self: *Parser) !?Ast.VariableStatement {
-        const token = self.next();
-        switch (token.tag) {
-            .keyword_let => {
-                const name = self.expectToken(.ident) orelse return null;
-                const _type = if (self.eatToken(.colon)) |_| blk: {
-                    const type_token = self.current_token;
-                    break :blk try self.typeSpecifier() orelse {
-                        self.addError(
-                            type_token.loc,
-                            "expected type sepecifier, but found '{s}'",
-                            .{type_token.tag.symbol()},
-                            &.{},
-                        );
-                        return null;
-                    };
-                } else null;
-                _ = self.expectToken(.equal) orelse return null;
-                const value = try self.expression() orelse return null;
-                _ = self.expectToken(.semicolon) orelse return null;
-                return .{
-                    .constant = false,
-                    .name = name.loc.asStr(self.source),
-                    .type = _type,
-                    .value = value,
-                };
-            },
-
-            // TODO
-
-            else => return null,
-        }
-    }
-
     pub fn expectToken(self: *Parser, tag: Token.Tag) ?Token {
         const token = self.next();
         if (token.tag == tag) return token;
@@ -640,13 +716,13 @@ const Parser = struct {
         return i;
     }
 
-    pub fn addError(self: Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) void {
-        if (self.error_lock) return;
-
+    pub fn addError(self: *Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) void {
         var bw = std.io.bufferedWriter(self.error_file.writer());
         const b = bw.writer();
         const term = std.debug.TTY.Config{ .escape_codes = {} };
         const loc_extra = loc.extraInfo(self.source);
+
+        if (self.failed) b.writeByte('\n') catch unreachable;
 
         // 'file:line:column'
         term.setColor(b, .Bold) catch unreachable;
@@ -694,15 +770,13 @@ const Parser = struct {
         // clean up and flush
         term.setColor(b, .Reset) catch unreachable;
         bw.flush() catch unreachable;
+
+        self.failed = true;
     }
 
     // TODO
-    pub fn parseNumberLiteral(str: []const u8) !Ast.Literal.Number {
-        return .{ .abstract_int = try std.fmt.parseInt(
-            i64,
-            str,
-            10,
-        ) };
+    pub fn numberLiteral(str: []const u8) !Ast.Literal.Number {
+        return .{ .abstract_int = try std.fmt.parseInt(i64, str, 10) };
     }
 };
 
@@ -710,8 +784,8 @@ const expectEqual = std.testing.expectEqual;
 test {
     std.testing.refAllDeclsRecursive(Parser);
     const source =
-        // \\let ali = vec<f32>(1);
         \\let ali = 1 + 5 + 2 * 3 > 6 >> 7;
+        \\type ali = ptr<functiond, f32, read>;
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

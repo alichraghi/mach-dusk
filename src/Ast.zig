@@ -36,14 +36,6 @@ pub fn getType(self: Ast, i: Index(Type)) Type {
     return self.types.items[i];
 }
 
-pub fn Span(comptime T: type) type {
-    return union(enum) {
-        zero,
-        one: Index(T),
-        multi: Range(T),
-    };
-}
-
 pub fn Range(comptime _: type) type {
     return struct {
         start: u32,
@@ -75,6 +67,20 @@ pub const Function = struct {};
 pub const Const = struct {};
 
 pub const Struct = struct {};
+
+pub const AddressSpace = enum {
+    function,
+    private,
+    storage,
+    uniform,
+    workgroup,
+};
+
+pub const AccessMode = enum {
+    read,
+    write,
+    read_write,
+};
 
 pub const TypeAlias = struct {
     name: []const u8,
@@ -131,7 +137,7 @@ pub const CallExpr = struct {
     };
 
     callable: Callable,
-    args: Span(Index(Expression)),
+    args: Range(Ast.Index(Expression)),
 };
 
 pub const BitcastExpr = struct {
@@ -204,6 +210,7 @@ pub const Type = union(enum) {
     sampler: Sampler,
     atomic: Atomic,
     array: Array,
+    ptr: Pointer,
     /// A user-defined type, like a struct or a type alias.
     user: []const u8,
 
@@ -296,5 +303,11 @@ pub const Type = union(enum) {
     pub const FixedArray = struct {
         size: Index(Expression),
         element: Index(Type),
+    };
+
+    pub const Pointer = struct {
+        addr_space: AddressSpace,
+        type: Index(Type),
+        access: ?AccessMode,
     };
 };

@@ -10,12 +10,13 @@ globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 expressions: std.ArrayListUnmanaged(Expression) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
 extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
-/// Contains PlainType's that an ArrayType `element_type` field need
-types: std.ArrayListUnmanaged(PlainType) = .{},
+/// Contains Type's that an ArrayType `element_type` field need
+types: std.ArrayListUnmanaged(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.globals.deinit(allocator);
     self.expressions.deinit(allocator);
+    self.extra.deinit(allocator);
     self.types.deinit(allocator);
 }
 
@@ -23,15 +24,15 @@ pub fn getGlobal(self: Ast, i: Index(GlobalDecl)) GlobalDecl {
     return self.globals.items[i];
 }
 
-pub fn getExpr(self: Ast, i: Index(Expression)) Expression {
-    return self.expressions.items[i];
+pub fn getExpr(self: Ast, i: Index(Expression)) *Expression {
+    return &self.expressions.items[i];
 }
 
 pub fn getExprRange(self: Ast, r: Range(Expression)) []const Expression {
     return self.expressions.items[r.start..r.end];
 }
 
-pub fn getPlainType(self: Ast, i: Index(PlainType)) PlainType {
+pub fn getType(self: Ast, i: Index(Type)) Type {
     return self.types.items[i];
 }
 
@@ -65,7 +66,7 @@ pub const GlobalDecl = union(enum) {
 pub const VariableStatement = struct {
     constant: bool,
     name: []const u8,
-    type: ?PlainType,
+    type: ?Index(Type),
     value: Index(Expression),
 };
 
@@ -77,12 +78,11 @@ pub const Struct = struct {};
 
 pub const TypeAlias = struct {
     name: []const u8,
-    type: PlainType,
+    type: Index(Type),
 };
 
 pub const Expression = union(enum) {
     literal: Literal,
-    construct: ConstructExpr,
     unary: UnaryExpr,
     binary: BinaryExpr,
     call: CallExpr,
@@ -118,34 +118,26 @@ pub const Literal = union(enum) {
     };
 };
 
-pub const ConstructExpr = struct {
-    pub const Type = union(enum) {
-        /// f32(e1,...eN), ...
-        scalar: ScalarType,
-        /// vec3<T?>(e1,...eN)
-        vector: VectorType,
-        /// mat2x2<T?>(e1,...eN)
-        matrix: MatrixType,
-        /// array(e1,...eN)
+pub const CallExpr = struct {
+    pub const Callable = union(enum) {
+        scalar: Type.Scalar,
+        partial_vector: Type.Vector.Prefix,
+        vector: Type.Vector,
+        partial_matrix: Type.Matrix.Prefix,
+        matrix: Type.Matrix,
         partial_array,
-        /// array<T, N?>(e1,...eN)
-        full_array: ArrayType,
-        user: []const u8,
+        array: Type.Array,
+        ident: []const u8,
     };
 
-    type: Type,
-    components: Span(Index(Expression)),
+    callable: Callable,
+    args: Span(Index(Expression)),
 };
 
 pub const BitcastExpr = struct {
     /// only i32, u32 and f32 is allowed
-    dest: ScalarType,
+    dest: Index(Type),
     expr: Index(Expression),
-};
-
-pub const CallExpr = struct {
-    func: []const u8,
-    args: Span(Index(Expression)),
 };
 
 pub const UnaryExpr = struct {
@@ -205,105 +197,104 @@ pub const BinaryExpr = struct {
     right: Index(Expression),
 };
 
-pub const PlainType = union(enum) {
-    scalar: ScalarType,
-    vector: VectorType,
-    matrix: MatrixType,
-    sampler: SamplerType,
-    atomic: AtomicType,
-    array: ArrayType,
+pub const Type = union(enum) {
+    scalar: Scalar,
+    vector: Vector,
+    matrix: Matrix,
+    sampler: Sampler,
+    atomic: Atomic,
+    array: Array,
     /// A user-defined type, like a struct or a type alias.
     user: []const u8,
-};
 
-pub const ScalarType = enum {
-    i32,
-    u32,
-    f32,
-    f16,
-    bool,
+    pub const Scalar = enum {
+        i32,
+        u32,
+        f32,
+        f16,
+        bool,
 
-    pub fn size(self: ScalarType) u8 {
-        return switch (self) {
-            .i32, .u32, .f32 => 4,
-            .f16 => 2,
-            .bool => 1,
+        // pub fn size(self: Scalar) u8 {
+        //     return switch (self) {
+        //         .i32, .u32, .f32 => 4,
+        //         .f16 => 2,
+        //         .bool => 1,
+        //     };
+        // }
+    };
+
+    pub const Sampler = struct {
+        comparison: bool,
+    };
+
+    pub const Vector = struct {
+        prefix: Prefix,
+        element: Index(Type),
+
+        pub const Prefix = enum {
+            vec2,
+            vec3,
+            vec4,
+
+            pub fn len(self: Prefix) u3 {
+                return switch (self) {
+                    .vec2 => 2,
+                    .vec3 => 3,
+                    .vec4 => 4,
+                };
+            }
         };
-    }
-};
+    };
 
-pub const SamplerType = struct {
-    comparison: bool,
-};
+    pub const Matrix = struct {
+        prefix: Prefix,
+        element: Index(Type),
 
-pub const VectorType = union(enum) {
-    partial: Partial,
-    full: Full,
+        pub const Prefix = enum {
+            mat2x2,
+            mat2x3,
+            mat2x4,
+            mat3x2,
+            mat3x3,
+            mat3x4,
+            mat4x2,
+            mat4x3,
+            mat4x4,
 
-    pub fn size(self: VectorType) Size {
-        return switch (self) {
-            inline else => |s| s.size,
+            pub fn cols(self: Prefix) u3 {
+                return switch (self) {
+                    .mat2x2, .mat2x3, .mat2x4 => 2,
+                    .mat3x2, .mat3x3, .mat3x4 => 3,
+                    .mat4x2, .mat4x3, .mat4x4 => 4,
+                };
+            }
+
+            pub fn rows(self: Prefix) u3 {
+                return switch (self) {
+                    .mat2x2, .mat3x2, .mat4x2 => 2,
+                    .mat2x3, .mat3x3, .mat4x3 => 3,
+                    .mat2x4, .mat3x4, .mat4x4 => 4,
+                };
+            }
         };
-    }
+    };
 
-    pub const Full = struct {
+    pub const Atomic = struct {
+        element: Index(Type),
+    };
+
+    pub const Array = struct {
+        pub const Size = union(enum) {
+            static: Index(Expression),
+            dynamic,
+        };
+
         size: Size,
-        element_type: ScalarType,
+        element: Index(Type),
     };
 
-    pub const Partial = struct {
-        size: Size,
+    pub const FixedArray = struct {
+        size: Index(Expression),
+        element: Index(Type),
     };
-
-    pub const Size = enum(u3) {
-        bi = 2,
-        tri = 3,
-        quad = 4,
-    };
-};
-
-pub const MatrixType = union(enum) {
-    partial: Partial,
-    full: Full,
-
-    pub fn len(self: MatrixType) u6 {
-        return @enumToInt(self.columns()) * @enumToInt(self.rows());
-    }
-
-    pub fn columns(self: MatrixType) VectorType.Size {
-        return switch (self) {
-            inline else => |s| s.columns,
-        };
-    }
-
-    pub fn rows(self: MatrixType) VectorType.Size {
-        return switch (self) {
-            inline else => |s| s.rows,
-        };
-    }
-
-    pub const Full = struct {
-        rows: VectorType.Size,
-        columns: VectorType.Size,
-        element_type: ScalarType,
-    };
-
-    pub const Partial = struct {
-        rows: VectorType.Size,
-        columns: VectorType.Size,
-    };
-};
-
-pub const AtomicType = struct {
-    element_type: ScalarType,
-};
-
-pub const ArrayType = struct {
-    pub const Size = union(enum) {
-        static: Index(Expression),
-        dynamic,
-    };
-
-    size: Size,
-    element_type: Index(PlainType),
 };

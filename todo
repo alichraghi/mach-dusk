@@ -1,0 +1,4 @@
+parseElementCountExpr
+remove Span
+always back to start token on error?
+token error before parse or current_token??

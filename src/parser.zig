@@ -47,6 +47,7 @@ pub fn parse(
                 std.debug.print("Unsupported token ({})\n", .{token.tag});
             },
         }
+        parser.error_lock = false;
     }
 
     if (parser.failed) return error.Parsing;
@@ -60,6 +61,7 @@ const Parser = struct {
     tokenizer: Tokenizer,
     current_token: Token,
     error_file: std.fs.File,
+    error_lock: bool = false,
     failed: bool = false,
     ast: Ast = .{},
 
@@ -69,7 +71,7 @@ const Parser = struct {
 
         const name = self.expectToken(.ident) orelse return null;
         _ = self.expectToken(.equal) orelse return null;
-        const value = try self.typeSpecifier(true) orelse return null;
+        const value = try self.expectTypeSpecifier() orelse return null;
         _ = self.expectToken(.semicolon) orelse return null;
 
         return .{ .name = name.loc.asStr(self.source), .type = value };
@@ -82,7 +84,7 @@ const Parser = struct {
 
                 const name = self.expectToken(.ident) orelse return null;
                 const _type = if (self.eatToken(.colon)) |_|
-                    try self.typeSpecifier(true) orelse return null
+                    try self.expectTypeSpecifier() orelse return null
                 else
                     null;
                 _ = self.expectToken(.equal) orelse return null;
@@ -102,25 +104,37 @@ const Parser = struct {
         }
     }
 
-    pub fn typeSpecifier(self: *Parser, expect: bool) !?Ast.Index(Ast.Type) {
+    pub fn expectTypeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
+        return try self.typeSpecifier() orelse {
+            self.addError(
+                self.current_token.loc,
+                "expected type sepecifier, found '{s}'",
+                .{self.current_token.tag.symbol()},
+                &.{},
+            );
+            return null;
+        };
+    }
+
+    pub fn typeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
         if (self.current_token.tag == .ident) {
             _ = self.next();
             return try self.addType(.{ .user = self.current_token.loc.asStr(self.source) });
         }
-        return self.typeSpecifierWithoutIdent(expect);
+        return self.typeSpecifierWithoutIdent();
     }
 
-    pub fn typeSpecifierWithoutIdent(self: *Parser, expect: bool) !?Ast.Index(Ast.Type) {
+    pub fn typeSpecifierWithoutIdent(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Type) {
         if (self.vectorPrefix()) |vec| {
             _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.typeSpecifier(true) orelse return null;
+            const elem_type = try self.expectTypeSpecifier() orelse return null;
             _ = self.expectToken(.greater_than) orelse return null;
             return try self.addType(.{ .vector = .{ .prefix = vec, .element = elem_type } });
         }
 
         if (self.matrixPrefix()) |mat| {
             _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.typeSpecifier(true) orelse return null;
+            const elem_type = try self.expectTypeSpecifier() orelse return null;
             _ = self.expectToken(.greater_than) orelse return null;
             return try self.addType(.{ .matrix = .{ .prefix = mat, .element = elem_type } });
         }
@@ -157,14 +171,14 @@ const Parser = struct {
             .keyword_atomic => {
                 _ = self.next();
                 _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.typeSpecifier(true) orelse return null;
+                const elem_type = try self.expectTypeSpecifier() orelse return null;
                 _ = self.expectToken(.greater_than) orelse return null;
                 return try self.addType(.{ .atomic = .{ .element = elem_type } });
             },
             .keyword_array => {
                 _ = self.next();
                 _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.typeSpecifier(true) orelse return null;
+                const elem_type = try self.expectTypeSpecifier() orelse return null;
                 if (self.eatToken(.comma)) |_| {
                     const expr_token = self.current_token;
                     const size = try self.elementCountExpr() orelse {
@@ -190,7 +204,7 @@ const Parser = struct {
                 _ = self.expectToken(.less_than) orelse return null;
                 const addr_space = self.expectAddressSpace() orelse return null;
                 _ = self.expectToken(.comma) orelse return null;
-                const ty = try self.typeSpecifier(true) orelse return null;
+                const ty = try self.expectTypeSpecifier() orelse return null;
                 if (self.eatToken(.comma)) |_| {
                     const access_mode = self.expectAccessMode() orelse return null;
                     _ = self.expectToken(.greater_than) orelse return null;
@@ -207,17 +221,7 @@ const Parser = struct {
                     .access = null,
                 } });
             },
-            else => {
-                if (expect) {
-                    self.addError(
-                        self.current_token.loc,
-                        "expected type sepecifier, found '{s}'",
-                        .{self.current_token.tag.symbol()},
-                        &.{},
-                    );
-                }
-                return null;
-            },
+            else => return null,
         }
     }
 
@@ -333,7 +337,7 @@ const Parser = struct {
             },
             .keyword_bitcast => {
                 _ = self.expectToken(.less_than) orelse return null;
-                const dest_type = try self.typeSpecifier(true) orelse return null;
+                const dest_type = try self.expectTypeSpecifier() orelse return null;
                 _ = self.expectToken(.greater_than) orelse return null;
                 const args = try self.expectParenExpr() orelse return null;
                 return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = args } });
@@ -371,7 +375,7 @@ const Parser = struct {
     pub fn callable(self: *Parser) error{OutOfMemory}!?Ast.CallExpr.Callable {
         const start_token = self.current_token;
 
-        if (try self.typeSpecifierWithoutIdent(false)) |ty_i| {
+        if (try self.typeSpecifierWithoutIdent()) |ty_i| {
             switch (self.ast.getType(ty_i)) {
                 .scalar => |p| return .{ .scalar = p },
                 .vector => |p| return .{ .vector = p },
@@ -704,6 +708,9 @@ const Parser = struct {
     }
 
     pub fn addError(self: *Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) void {
+        if (self.error_lock) return;
+        self.error_lock = true;
+
         var bw = std.io.bufferedWriter(self.error_file.writer());
         const b = bw.writer();
         const term = std.debug.TTY.Config{ .escape_codes = {} };

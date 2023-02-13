@@ -25,35 +25,30 @@ pub fn parse(
     try parser.ast.globals.ensureTotalCapacityPrecise(allocator, source.len / 300); // 1:300 source to globals
     try parser.ast.expressions.ensureTotalCapacityPrecise(allocator, source.len / 10); // 1:10 source to expressions
 
-    while (true) {
-        const token = parser.current_token;
-        switch (token.tag) {
-            .keyword_type => {
-                const res = parser.typeAlias() catch |err| {
-                    if (err == error.Parsing) {
-                        parser.continueUntilOrEOF(.semicolon);
-                        continue;
-                    }
-                    return err;
-                };
-                _ = try parser.addGlobalDecl(.{ .type_alias = res });
-            },
-            .keyword_let => {
-                const res = parser.varStatement() catch |err| {
-                    if (err == error.Parsing) {
-                        parser.continueUntilOrEOF(.semicolon);
-                        continue;
-                    }
-                    return err;
-                };
-                _ = try parser.addGlobalDecl(.{ .variable = res });
-            },
-            .eof => break,
-            else => {
-                std.debug.print("Unsupported token ({})\n", .{token.tag});
-            },
-        }
+    while (parser.current_token.tag != .eof) {
         parser.error_lock = false;
+
+        if (parser.typeAlias()) |type_alias| {
+            _ = try parser.addGlobalDecl(.{ .type_alias = type_alias });
+        } else |err| {
+            if (err == error.Parsing) {
+                if (parser.error_lock) {
+                    parser.continueUntilOrEOF(.semicolon);
+                    continue;
+                }
+            } else return err;
+        }
+
+        if (parser.varStatement()) |variable| {
+            _ = try parser.addGlobalDecl(.{ .variable = variable });
+        } else |err| {
+            if (err == error.Parsing) {
+                if (parser.error_lock) {
+                    parser.continueUntilOrEOF(.semicolon);
+                    continue;
+                }
+            } else return err;
+        }
     }
 
     if (parser.failed) return error.Parsing;
@@ -71,6 +66,7 @@ const Parser = struct {
     failed: bool = false,
     ast: Ast = .{},
 
+    /// TypeAlias : TYPE IDENT EQUAL TypeSpecifier
     pub fn typeAlias(self: *Parser) !Ast.TypeAlias {
         if (self.current_token.tag != .keyword_type) return error.Parsing;
         _ = self.next();
@@ -83,23 +79,25 @@ const Parser = struct {
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
+    /// VariableStatement
+    ///   : VariableDecl                          TODO
+    ///   | VariableDecl EQUAL Expression         TODO
+    ///   | LET OptionalType EQUAL expression
+    ///   | CONST OptionalType EQUAL expression   TODO
     pub fn varStatement(self: *Parser) !Ast.VariableStatement {
         switch (self.current_token.tag) {
             .keyword_let => {
                 _ = self.next();
 
                 const name = try self.expectToken(.ident);
-                const _type = if (self.eatToken(.colon)) |_|
-                    try self.expectTypeSpecifier()
-                else
-                    null;
+                const optional_type = try self.optionalType();
                 _ = try self.expectToken(.equal);
                 const value = try self.expression();
                 _ = try self.expectToken(.semicolon);
                 return .{
                     .constant = false,
                     .name = name.loc.asStr(self.source),
-                    .type = _type,
+                    .type = optional_type,
                     .value = value,
                 };
             },
@@ -110,7 +108,15 @@ const Parser = struct {
         }
     }
 
-    pub fn expectTypeSpecifier(self: *Parser) !Ast.Index(Ast.Type) {
+    /// OptionalType : ( COLON TypeSpecifier )?
+    pub fn optionalType(self: *Parser) !?Ast.Index(Ast.Type) {
+        return if (self.eatToken(.colon)) |_|
+            try self.expectTypeSpecifier()
+        else
+            null;
+    }
+
+    pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Index(Ast.Type) {
         return self.typeSpecifier() catch |err| {
             if (err == error.Parsing) {
                 self.addError(
@@ -124,6 +130,7 @@ const Parser = struct {
         };
     }
 
+    /// TypeSpecifier : IDENTIFIER | TypeSpecifierWithoutIdent
     pub fn typeSpecifier(self: *Parser) !Ast.Index(Ast.Type) {
         if (self.current_token.tag == .ident) {
             _ = self.next();
@@ -132,7 +139,19 @@ const Parser = struct {
         return self.typeSpecifierWithoutIdent();
     }
 
-    pub fn typeSpecifierWithoutIdent(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Index(Ast.Type) {
+    /// TypeSpecifierWithoutIdent
+    ///   : BOOL
+    ///   | F16
+    ///   | F32
+    ///   | I32
+    ///   | U32
+    ///   | ARRAY LESS_THAN TypeSpecifier ( COMMA ElementCountExpr )? GREATER_THAN
+    ///   | ATOMIC LESS_THAN TypeSpecifier GREATER_THAN
+    ///   | PTR LESS_THAN AddressSpace COMMA TypeSpecifier ( COMMA AccessMode )? GREATER_THAN
+    ///   | MatrixPrefix LESS_THAN TypeSpecifier GREATER_THAN
+    ///   | VectorPrefix LESS_THAN TypeSpecifier GREATER_THAN
+    ///   | texture_and_sampler_types TODO
+    pub fn typeSpecifierWithoutIdent(self: *Parser) !Ast.Index(Ast.Type) {
         if (self.vectorPrefix()) |vec| {
             _ = try self.expectToken(.less_than);
             const elem_type = try self.expectTypeSpecifier();
@@ -235,6 +254,10 @@ const Parser = struct {
         }
     }
 
+    /// VectorPrefix
+    ///   : 'vec2'
+    ///   | 'vec3'
+    ///   | 'vec4'
     pub fn vectorPrefix(self: *Parser) !Ast.Type.Vector.Prefix {
         const res: Ast.Type.Vector.Prefix = switch (self.current_token.tag) {
             .keyword_vec2 => .vec2,
@@ -246,6 +269,16 @@ const Parser = struct {
         return res;
     }
 
+    /// MatrixPrefix
+    ///   : 'mat2x2'
+    ///   | 'mat2x3'
+    ///   | 'mat2x4'
+    ///   | 'mat3x2'
+    ///   | 'mat3x3'
+    ///   | 'mat3x4'
+    ///   | 'mat4x2'
+    ///   | 'mat4x3'
+    ///   | 'mat4x4'
     pub fn matrixPrefix(self: *Parser) !Ast.Type.Matrix.Prefix {
         const res: Ast.Type.Matrix.Prefix = switch (self.current_token.tag) {
             .keyword_mat2x2 => .mat2x2,
@@ -263,6 +296,12 @@ const Parser = struct {
         return res;
     }
 
+    /// AddressSpace
+    ///   : 'function'
+    ///   | 'private'
+    ///   | 'workgroup'
+    ///   | 'uniform'
+    ///   | 'storage'
     pub fn expectAddressSpace(self: *Parser) !Ast.AddressSpace {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
@@ -293,6 +332,7 @@ const Parser = struct {
         return error.Parsing;
     }
 
+    /// AccessMode : 'read' | 'write' | 'read_write'
     pub fn expectAccessMode(self: *Parser) !Ast.AccessMode {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
@@ -318,16 +358,13 @@ const Parser = struct {
     }
 
     pub fn primaryExpr(self: *Parser) !Ast.Index(Ast.Expression) {
-        const start_token = self.current_token;
 
         // TODO: https://gpuweb.github.io/gpuweb/wgsl/#syntax-type_specifier_without_ident
-        // 'ptr' '<' address_space ',' type_specifier ( ',' access_mode ) ? '>'
         // texture_and_sampler_types
         if (self.callable()) |call| {
             const args = try self.expectArgumentExpressionList();
             return try self.addExpr(.{ .call = .{ .callable = call, .args = args } });
         } else |err| if (err != error.Parsing) return err;
-        self.regress(start_token);
 
         const token = self.current_token;
         switch (token.tag) {
@@ -384,7 +421,7 @@ const Parser = struct {
         return expr;
     }
 
-    pub fn callable(self: *Parser) error{ OutOfMemory, Parsing }!Ast.CallExpr.Callable {
+    pub fn callable(self: *Parser) !Ast.CallExpr.Callable {
         const start_token = self.current_token;
 
         if (self.typeSpecifierWithoutIdent()) |ty_i| {
@@ -414,7 +451,7 @@ const Parser = struct {
         return error.Parsing;
     }
 
-    pub fn expectArgumentExpressionList(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Range(Ast.Index(Ast.Expression)) {
+    pub fn expectArgumentExpressionList(self: *Parser) !Ast.Range(Ast.Index(Ast.Expression)) {
         var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
         _ = try self.expectToken(.paren_left);
         while (true) {
@@ -443,6 +480,9 @@ const Parser = struct {
         };
     }
 
+    /// ElementCountExpr
+    ///   : UnaryExpr MathExpr
+    ///   | UnaryExpr BitwiseExpr
     pub fn elementCountExpr(self: *Parser) !Ast.Index(Ast.Expression) {
         const left = try self.unaryExpr();
 

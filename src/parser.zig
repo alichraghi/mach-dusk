@@ -29,16 +29,22 @@ pub fn parse(
         const token = parser.current_token;
         switch (token.tag) {
             .keyword_type => {
-                const res = try parser.typeAlias() orelse {
-                    parser.continueUntilOrEOF(.semicolon);
-                    continue;
+                const res = parser.typeAlias() catch |err| {
+                    if (err == error.Parsing) {
+                        parser.continueUntilOrEOF(.semicolon);
+                        continue;
+                    }
+                    return err;
                 };
                 _ = try parser.addGlobalDecl(.{ .type_alias = res });
             },
             .keyword_let => {
-                const res = try parser.varStatement() orelse {
-                    parser.continueUntilOrEOF(.semicolon);
-                    continue;
+                const res = parser.varStatement() catch |err| {
+                    if (err == error.Parsing) {
+                        parser.continueUntilOrEOF(.semicolon);
+                        continue;
+                    }
+                    return err;
                 };
                 _ = try parser.addGlobalDecl(.{ .variable = res });
             },
@@ -65,31 +71,31 @@ const Parser = struct {
     failed: bool = false,
     ast: Ast = .{},
 
-    pub fn typeAlias(self: *Parser) !?Ast.TypeAlias {
-        if (self.current_token.tag != .keyword_type) return null;
+    pub fn typeAlias(self: *Parser) !Ast.TypeAlias {
+        if (self.current_token.tag != .keyword_type) return error.Parsing;
         _ = self.next();
 
-        const name = self.expectToken(.ident) orelse return null;
-        _ = self.expectToken(.equal) orelse return null;
-        const value = try self.expectTypeSpecifier() orelse return null;
-        _ = self.expectToken(.semicolon) orelse return null;
+        const name = try self.expectToken(.ident);
+        _ = try self.expectToken(.equal);
+        const value = try self.expectTypeSpecifier();
+        _ = try self.expectToken(.semicolon);
 
         return .{ .name = name.loc.asStr(self.source), .type = value };
     }
 
-    pub fn varStatement(self: *Parser) !?Ast.VariableStatement {
+    pub fn varStatement(self: *Parser) !Ast.VariableStatement {
         switch (self.current_token.tag) {
             .keyword_let => {
                 _ = self.next();
 
-                const name = self.expectToken(.ident) orelse return null;
+                const name = try self.expectToken(.ident);
                 const _type = if (self.eatToken(.colon)) |_|
-                    try self.expectTypeSpecifier() orelse return null
+                    try self.expectTypeSpecifier()
                 else
                     null;
-                _ = self.expectToken(.equal) orelse return null;
-                const value = try self.expression() orelse return null;
-                _ = self.expectToken(.semicolon) orelse return null;
+                _ = try self.expectToken(.equal);
+                const value = try self.expression();
+                _ = try self.expectToken(.semicolon);
                 return .{
                     .constant = false,
                     .name = name.loc.asStr(self.source),
@@ -100,23 +106,25 @@ const Parser = struct {
 
             // TODO
 
-            else => return null,
+            else => return error.Parsing,
         }
     }
 
-    pub fn expectTypeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
-        return try self.typeSpecifier() orelse {
-            self.addError(
-                self.current_token.loc,
-                "expected type sepecifier, found '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return null;
+    pub fn expectTypeSpecifier(self: *Parser) !Ast.Index(Ast.Type) {
+        return self.typeSpecifier() catch |err| {
+            if (err == error.Parsing) {
+                self.addError(
+                    self.current_token.loc,
+                    "expected type sepecifier, found '{s}'",
+                    .{self.current_token.tag.symbol()},
+                    &.{},
+                );
+            }
+            return err;
         };
     }
 
-    pub fn typeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
+    pub fn typeSpecifier(self: *Parser) !Ast.Index(Ast.Type) {
         if (self.current_token.tag == .ident) {
             _ = self.next();
             return try self.addType(.{ .user = self.current_token.loc.asStr(self.source) });
@@ -124,20 +132,20 @@ const Parser = struct {
         return self.typeSpecifierWithoutIdent();
     }
 
-    pub fn typeSpecifierWithoutIdent(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Type) {
+    pub fn typeSpecifierWithoutIdent(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Index(Ast.Type) {
         if (self.vectorPrefix()) |vec| {
-            _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.expectTypeSpecifier() orelse return null;
-            _ = self.expectToken(.greater_than) orelse return null;
+            _ = try self.expectToken(.less_than);
+            const elem_type = try self.expectTypeSpecifier();
+            _ = try self.expectToken(.greater_than);
             return try self.addType(.{ .vector = .{ .prefix = vec, .element = elem_type } });
-        }
+        } else |_| {}
 
         if (self.matrixPrefix()) |mat| {
-            _ = self.expectToken(.less_than) orelse return null;
-            const elem_type = try self.expectTypeSpecifier() orelse return null;
-            _ = self.expectToken(.greater_than) orelse return null;
+            _ = try self.expectToken(.less_than);
+            const elem_type = try self.expectTypeSpecifier();
+            _ = try self.expectToken(.greater_than);
             return try self.addType(.{ .matrix = .{ .prefix = mat, .element = elem_type } });
-        }
+        } else |_| {}
 
         switch (self.current_token.tag) {
             .keyword_i32 => {
@@ -170,73 +178,75 @@ const Parser = struct {
             },
             .keyword_atomic => {
                 _ = self.next();
-                _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.expectTypeSpecifier() orelse return null;
-                _ = self.expectToken(.greater_than) orelse return null;
+                _ = try self.expectToken(.less_than);
+                const elem_type = try self.expectTypeSpecifier();
+                _ = try self.expectToken(.greater_than);
                 return try self.addType(.{ .atomic = .{ .element = elem_type } });
             },
             .keyword_array => {
                 _ = self.next();
-                _ = self.expectToken(.less_than) orelse return null;
-                const elem_type = try self.expectTypeSpecifier() orelse return null;
+                _ = try self.expectToken(.less_than);
+                const elem_type = try self.expectTypeSpecifier();
                 if (self.eatToken(.comma)) |_| {
                     const expr_token = self.current_token;
-                    const size = try self.elementCountExpr() orelse {
-                        self.addError(
-                            expr_token.loc,
-                            "expected array size expression, found '{s}'",
-                            .{expr_token.tag.symbol()},
-                            &.{},
-                        );
-                        return null;
+                    const size = self.elementCountExpr() catch |err| {
+                        if (err == error.Parsing) {
+                            self.addError(
+                                expr_token.loc,
+                                "expected array size expression, found '{s}'",
+                                .{expr_token.tag.symbol()},
+                                &.{},
+                            );
+                        }
+                        return err;
                     };
-                    _ = self.expectToken(.greater_than) orelse return null;
+                    _ = try self.expectToken(.greater_than);
                     return try self.addType(.{ .array = .{
                         .element = elem_type,
                         .size = .{ .static = size },
                     } });
                 }
-                _ = self.expectToken(.greater_than) orelse return null;
+                _ = try self.expectToken(.greater_than);
                 return try self.addType(.{ .array = .{ .element = elem_type, .size = .dynamic } });
             },
             .keyword_ptr => {
                 _ = self.next();
-                _ = self.expectToken(.less_than) orelse return null;
-                const addr_space = self.expectAddressSpace() orelse return null;
-                _ = self.expectToken(.comma) orelse return null;
-                const ty = try self.expectTypeSpecifier() orelse return null;
+                _ = try self.expectToken(.less_than);
+                const addr_space = try self.expectAddressSpace();
+                _ = try self.expectToken(.comma);
+                const ty = try self.expectTypeSpecifier();
                 if (self.eatToken(.comma)) |_| {
-                    const access_mode = self.expectAccessMode() orelse return null;
-                    _ = self.expectToken(.greater_than) orelse return null;
+                    const access_mode = try self.expectAccessMode();
+                    _ = try self.expectToken(.greater_than);
                     return try self.addType(.{ .ptr = .{
                         .addr_space = addr_space,
                         .type = ty,
                         .access = access_mode,
                     } });
                 }
-                _ = self.expectToken(.greater_than) orelse return null;
+                _ = try self.expectToken(.greater_than);
                 return try self.addType(.{ .ptr = .{
                     .addr_space = addr_space,
                     .type = ty,
                     .access = null,
                 } });
             },
-            else => return null,
+            else => return error.Parsing,
         }
     }
 
-    pub fn vectorPrefix(self: *Parser) ?Ast.Type.Vector.Prefix {
+    pub fn vectorPrefix(self: *Parser) !Ast.Type.Vector.Prefix {
         const res: Ast.Type.Vector.Prefix = switch (self.current_token.tag) {
             .keyword_vec2 => .vec2,
             .keyword_vec3 => .vec3,
             .keyword_vec4 => .vec4,
-            else => return null,
+            else => return error.Parsing,
         };
         _ = self.next();
         return res;
     }
 
-    pub fn matrixPrefix(self: *Parser) ?Ast.Type.Matrix.Prefix {
+    pub fn matrixPrefix(self: *Parser) !Ast.Type.Matrix.Prefix {
         const res: Ast.Type.Matrix.Prefix = switch (self.current_token.tag) {
             .keyword_mat2x2 => .mat2x2,
             .keyword_mat2x3 => .mat2x3,
@@ -247,13 +257,13 @@ const Parser = struct {
             .keyword_mat4x2 => .mat4x2,
             .keyword_mat4x3 => .mat4x3,
             .keyword_mat4x4 => .mat4x4,
-            else => return null,
+            else => return error.Parsing,
         };
         _ = self.next();
         return res;
     }
 
-    pub fn expectAddressSpace(self: *Parser) ?Ast.AddressSpace {
+    pub fn expectAddressSpace(self: *Parser) !Ast.AddressSpace {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
             if (std.mem.eql(u8, "function", str)) {
@@ -280,10 +290,10 @@ const Parser = struct {
             .{self.current_token.tag.symbol()},
             &.{"must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'"},
         );
-        return null;
+        return error.Parsing;
     }
 
-    pub fn expectAccessMode(self: *Parser) ?Ast.AccessMode {
+    pub fn expectAccessMode(self: *Parser) !Ast.AccessMode {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
             if (std.mem.eql(u8, "read", str)) {
@@ -304,19 +314,19 @@ const Parser = struct {
             .{self.current_token.tag.symbol()},
             &.{"must be one of 'read', 'write', 'read_write'"},
         );
-        return null;
+        return error.Parsing;
     }
 
-    pub fn primaryExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
+    pub fn primaryExpr(self: *Parser) !Ast.Index(Ast.Expression) {
         const start_token = self.current_token;
 
         // TODO: https://gpuweb.github.io/gpuweb/wgsl/#syntax-type_specifier_without_ident
         // 'ptr' '<' address_space ',' type_specifier ( ',' access_mode ) ? '>'
         // texture_and_sampler_types
-        if (try self.callable()) |call| {
-            const args = try self.expectArgumentExpressionList() orelse return null;
+        if (self.callable()) |call| {
+            const args = try self.expectArgumentExpressionList();
             return try self.addExpr(.{ .call = .{ .callable = call, .args = args } });
-        }
+        } else |err| if (err != error.Parsing) return err;
         self.regress(start_token);
 
         const token = self.current_token;
@@ -336,16 +346,16 @@ const Parser = struct {
                 } });
             },
             .keyword_bitcast => {
-                _ = self.expectToken(.less_than) orelse return null;
-                const dest_type = try self.expectTypeSpecifier() orelse return null;
-                _ = self.expectToken(.greater_than) orelse return null;
-                const args = try self.expectParenExpr() orelse return null;
+                _ = try self.expectToken(.less_than);
+                const dest_type = try self.expectTypeSpecifier();
+                _ = try self.expectToken(.greater_than);
+                const args = try self.expectParenExpr();
                 return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = args } });
             },
             .paren_left => return self.expectParenExpr(),
             .ident => {
                 if (self.peek().tag == .paren_left) {
-                    const args = try self.expectArgumentExpressionList() orelse return null;
+                    const args = try self.expectArgumentExpressionList();
                     return try self.addExpr(.{ .call = .{
                         .callable = .{ .ident = token.loc.asStr(self.source) },
                         .args = args,
@@ -353,55 +363,66 @@ const Parser = struct {
                 }
                 return try self.addExpr(.{ .ident = token.loc.asStr(self.source) });
             },
-            else => return null,
+            else => return error.Parsing,
         }
     }
 
-    pub fn expectParenExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        _ = self.expectToken(.paren_left) orelse return null;
-        const expr = try self.expression() orelse {
-            self.addError(
-                self.current_token.loc,
-                "unable to parse expression '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return null;
+    pub fn expectParenExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        _ = try self.expectToken(.paren_left);
+        const expr = self.expression() catch |err| {
+            if (err == error.Parsing) {
+                self.addError(
+                    self.current_token.loc,
+                    "unable to parse expression '{s}'",
+                    .{self.current_token.tag.symbol()},
+                    &.{},
+                );
+            }
+            return err;
         };
-        _ = self.expectToken(.paren_right) orelse return null;
+        _ = try self.expectToken(.paren_right);
         return expr;
     }
 
-    pub fn callable(self: *Parser) error{OutOfMemory}!?Ast.CallExpr.Callable {
+    pub fn callable(self: *Parser) error{ OutOfMemory, Parsing }!Ast.CallExpr.Callable {
         const start_token = self.current_token;
 
-        if (try self.typeSpecifierWithoutIdent()) |ty_i| {
+        if (self.typeSpecifierWithoutIdent()) |ty_i| {
             switch (self.ast.getType(ty_i)) {
                 .scalar => |p| return .{ .scalar = p },
                 .vector => |p| return .{ .vector = p },
                 .matrix => |p| return .{ .matrix = p },
                 .array => |p| return .{ .array = p },
-                else => return null,
+                else => return error.Parsing,
             }
-        }
+        } else |err| if (err != error.Parsing) return error.Parsing;
         self.regress(start_token);
 
-        if (self.vectorPrefix()) |vec| return .{ .partial_vector = vec };
-        if (self.matrixPrefix()) |mat| return .{ .partial_matrix = mat };
+        if (self.vectorPrefix()) |vec|
+            return .{ .partial_vector = vec }
+        else |_| {}
+
+        if (self.matrixPrefix()) |mat|
+            return .{ .partial_matrix = mat }
+        else |_| {}
+
         if (start_token.tag == .keyword_array) {
             _ = self.next();
             return .partial_array;
         }
 
-        return null;
+        return error.Parsing;
     }
 
-    pub fn expectArgumentExpressionList(self: *Parser) error{OutOfMemory}!?Ast.Range(Ast.Index(Ast.Expression)) {
+    pub fn expectArgumentExpressionList(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Range(Ast.Index(Ast.Expression)) {
         var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
-        _ = self.expectToken(.paren_left) orelse return null;
+        _ = try self.expectToken(.paren_left);
         while (true) {
             const expr_token = self.current_token;
-            const expr = try self.expression() orelse break;
+            const expr = self.expression() catch |err| {
+                if (err == error.Parsing) break;
+                return err;
+            };
             args.append(expr) catch {
                 self.addError(
                     expr_token.loc,
@@ -409,11 +430,11 @@ const Parser = struct {
                     .{max_call_args},
                     &.{},
                 );
-                return null;
+                return error.Parsing;
             };
             if (self.current_token.tag != .comma) break;
         }
-        _ = self.expectToken(.paren_right) orelse return null;
+        _ = try self.expectToken(.paren_right);
 
         try self.ast.extra.appendSlice(self.allocator, args.slice());
         return .{
@@ -422,21 +443,17 @@ const Parser = struct {
         };
     }
 
-    pub fn elementCountExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left = try self.unaryExpr() orelse return null;
+    pub fn elementCountExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left = try self.unaryExpr();
 
-        if (try self.bitwiseExpr(left)) |right| {
+        if (self.bitwiseExpr(left)) |right| {
             return right;
-        }
+        } else |err| if (err != error.Parsing) return err;
 
-        if (try self.expectMathExpr(left)) |right| {
-            return right;
-        }
-
-        return null;
+        return self.expectMathExpr(left);
     }
 
-    pub fn unaryExpr(self: *Parser) error{OutOfMemory}!?Ast.Index(Ast.Expression) {
+    pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Index(Ast.Expression) {
         const start_token = self.current_token;
 
         const op: Ast.UnaryExpr.Operation = switch (self.current_token.tag) {
@@ -448,25 +465,27 @@ const Parser = struct {
         };
         _ = self.next();
 
-        const expr = try self.unaryExpr() orelse {
-            self.addError(
-                self.current_token.loc,
-                "unable to parse right side of '{s}' expression",
-                .{start_token.tag.symbol()},
-                &.{},
-            );
-            return null;
+        const expr = self.unaryExpr() catch |err| {
+            if (err == error.Parsing) {
+                self.addError(
+                    self.current_token.loc,
+                    "unable to parse right side of '{s}' expression",
+                    .{start_token.tag.symbol()},
+                    &.{},
+                );
+            }
+            return err;
         };
 
         return try self.addExpr(.{ .unary = .{ .op = op, .expr = expr } });
     }
 
-    pub fn singularExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
+    pub fn singularExpr(self: *Parser) !Ast.Index(Ast.Expression) {
         return self.primaryExpr();
         // TODO: component_or_swizzle_specifier
     }
 
-    pub fn expectMultiplicativeExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
+    pub fn expectMultiplicativeExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         var left_result = left;
         while (true) {
             const op_token = self.current_token;
@@ -477,14 +496,16 @@ const Parser = struct {
                 else => return left_result,
             };
             _ = self.next();
-            const right = try self.unaryExpr() orelse {
-                self.addError(
-                    self.current_token.loc,
-                    "unable to parse right side of '{s}' expression",
-                    .{op_token.tag.symbol()},
-                    &.{},
-                );
-                return null;
+            const right = self.unaryExpr() catch |err| {
+                if (err == error.Parsing) {
+                    self.addError(
+                        self.current_token.loc,
+                        "unable to parse right side of '{s}' expression",
+                        .{op_token.tag.symbol()},
+                        &.{},
+                    );
+                }
+                return err;
             };
             left_result = try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
         }
@@ -492,7 +513,7 @@ const Parser = struct {
         unreachable;
     }
 
-    pub fn expectAdditiveExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
+    pub fn expectAdditiveExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         var left_result = left;
         while (true) {
             const op_token = self.current_token;
@@ -502,33 +523,35 @@ const Parser = struct {
                 else => return left_result,
             };
             _ = self.next();
-            const unary = try self.unaryExpr() orelse {
-                self.addError(
-                    self.current_token.loc,
-                    "unable to parse right side of '{s}' expression",
-                    .{op_token.tag.symbol()},
-                    &.{},
-                );
-                return null;
+            const unary = self.unaryExpr() catch |err| {
+                if (err == error.Parsing) {
+                    self.addError(
+                        self.current_token.loc,
+                        "unable to parse right side of '{s}' expression",
+                        .{op_token.tag.symbol()},
+                        &.{},
+                    );
+                }
+                return err;
             };
-            const right = try self.expectMultiplicativeExpr(unary) orelse return null;
+            const right = try self.expectMultiplicativeExpr(unary);
             left_result = try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
         }
 
         unreachable;
     }
 
-    pub fn expectMathExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
-        const right = try self.expectMultiplicativeExpr(left) orelse return null;
+    pub fn expectMathExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const right = try self.expectMultiplicativeExpr(left);
         return self.expectAdditiveExpr(right);
     }
 
-    pub fn shiftExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left = try self.unaryExpr() orelse return null;
+    pub fn shiftExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left = try self.unaryExpr();
         return self.expectShiftExpr(left);
     }
 
-    pub fn expectShiftExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
+    pub fn expectShiftExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         const op_token = self.current_token;
         const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
             .shift_left => .shift_left,
@@ -537,26 +560,28 @@ const Parser = struct {
         };
         _ = self.next();
 
-        const right = try self.unaryExpr() orelse {
-            self.addError(
-                self.current_token.loc,
-                "unable to parse right side of '{s}' expression",
-                .{op_token.tag.symbol()},
-                &.{},
-            );
-            return null;
+        const right = self.unaryExpr() catch |err| {
+            if (err == error.Parsing) {
+                self.addError(
+                    self.current_token.loc,
+                    "unable to parse right side of '{s}' expression",
+                    .{op_token.tag.symbol()},
+                    &.{},
+                );
+            }
+            return err;
         };
 
         return try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
     }
 
-    pub fn relationalExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left = try self.unaryExpr() orelse return null;
+    pub fn relationalExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left = try self.unaryExpr();
         return self.expectRelationalExpr(left);
     }
 
-    pub fn expectRelationalExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
-        const left_result = try self.expectShiftExpr(left) orelse return null;
+    pub fn expectRelationalExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const left_result = try self.expectShiftExpr(left);
         const op_token = self.current_token;
         const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
             .equal_equal => .equal,
@@ -569,38 +594,42 @@ const Parser = struct {
         };
         _ = self.next();
 
-        const right = try self.shiftExpr() orelse {
-            self.addError(
-                self.current_token.loc,
-                "unable to parse right side of '{s}' expression",
-                .{op_token.tag.symbol()},
-                &.{},
-            );
-            return null;
-        };
-        return try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
-    }
-
-    pub fn bitwiseExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
-        const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
-            .@"and" => .binary_and,
-            .@"or" => .binary_or,
-            .xor => .binary_xor,
-            else => return null,
-        };
-        _ = self.next();
-
-        var left_result = left;
-        while (true) {
-            const right = try self.unaryExpr() orelse {
+        const right = self.shiftExpr() catch |err| {
+            if (err == error.Parsing) {
                 self.addError(
                     self.current_token.loc,
                     "unable to parse right side of '{s}' expression",
                     .{op_token.tag.symbol()},
                     &.{},
                 );
-                return null;
+            }
+            return err;
+        };
+        return try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
+    }
+
+    pub fn bitwiseExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        const op_token = self.current_token;
+        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            .@"and" => .binary_and,
+            .@"or" => .binary_or,
+            .xor => .binary_xor,
+            else => return error.Parsing,
+        };
+        _ = self.next();
+
+        var left_result = left;
+        while (true) {
+            const right = self.unaryExpr() catch |err| {
+                if (err == error.Parsing) {
+                    self.addError(
+                        self.current_token.loc,
+                        "unable to parse right side of '{s}' expression",
+                        .{op_token.tag.symbol()},
+                        &.{},
+                    );
+                }
+                return err;
             };
 
             left_result = try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
@@ -611,13 +640,13 @@ const Parser = struct {
         unreachable;
     }
 
-    pub fn expression(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left = try self.unaryExpr() orelse return null;
-        if (try self.bitwiseExpr(left)) |bitwise| {
+    pub fn expression(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left = try self.unaryExpr();
+        if (self.bitwiseExpr(left)) |bitwise| {
             return bitwise;
-        }
+        } else |err| if (err != error.Parsing) return err;
 
-        var ret = try self.expectRelationalExpr(left) orelse return null;
+        var ret = try self.expectRelationalExpr(left);
 
         const op_token = self.current_token;
         const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
@@ -631,14 +660,16 @@ const Parser = struct {
             if (token.tag != op_token.tag) break;
             _ = self.next();
 
-            const right = try self.relationalExpr() orelse {
-                self.addError(
-                    self.current_token.loc,
-                    "unable to parse right side of '{s}' expression",
-                    .{op_token.tag.symbol()},
-                    &.{},
-                );
-                return null;
+            const right = self.relationalExpr() catch |err| {
+                if (err == error.Parsing) {
+                    self.addError(
+                        self.current_token.loc,
+                        "unable to parse right side of '{s}' expression",
+                        .{op_token.tag.symbol()},
+                        &.{},
+                    );
+                }
+                return err;
             };
 
             ret = try self.addExpr(.{ .binary = .{ .op = op, .left = ret, .right = right } });
@@ -647,16 +678,18 @@ const Parser = struct {
         return ret;
     }
 
-    pub fn expectToken(self: *Parser, tag: Token.Tag) ?Token {
+    pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {
         const token = self.next();
+
         if (token.tag == tag) return token;
+
         self.addError(
             token.loc,
             "expected '{s}', but found '{s}'",
             .{ @tagName(tag), @tagName(token.tag) },
             &.{},
         );
-        return null;
+        return error.Parsing;
     }
 
     pub fn eatToken(self: *Parser, tag: Token.Tag) ?Token {

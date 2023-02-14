@@ -886,56 +886,38 @@ const Parser = struct {
     }
 };
 
-const expectEqual = std.testing.expectEqual;
+const expect = std.testing.expect;
 test {
     std.testing.refAllDeclsRecursive(Parser);
     const source =
-        \\let ali = 1 + 5 + 2 * 3 > 6 >> 7;
-        \\type ali = ptr<function, f32, read>;
+        \\let expr = 1 + 5 + 2 * 3 > 6 >> 7;
     ;
 
     var ast = try parse(std.testing.allocator, source, null);
     defer ast.deinit(std.testing.allocator);
 
-    const greater = ast.getExpr(ast.getGlobal(0).variable.value).binary;
-    const add = ast.getExpr(greater.left).binary;
-    const add_left = ast.getExpr(add.left).binary;
-    const add_left_left = ast.getExpr(add_left.left).literal;
-    const add_left_right = ast.getExpr(add_left.right).literal;
-    const add_right = ast.getExpr(add.right).binary;
-    // const shift = ast.getExpr(greater.right).binary;
-    std.debug.print("\n\n{}\n{}\n{}\n{}\n{}\n", .{
-        add,
-        add_left,
-        add_left_left,
-        add_left_right,
-        add_right,
-    });
-    // std.debug.print(
-    //     \\
-    //     \\
-    //     \\Greater: {}
-    //     \\ --> Add:   {}
-    //     \\   --> Number: {}
-    //     \\   --> Add:    {}
-    //     \\     --> Number: {}
-    //     \\     --> Mul:    {}
-    //     \\ --> Shift: {}
-    //     \\
-    //     \\
-    // , .{ greater, add, add_left, add_right, shift });
+    const expr = ast.getExpr(ast.getGlobal(0).variable.value).binary;
 
-    // const t1_type = ast.getGlobal(0).type_alias.type.array;
-    // const t1_elem_type = ast.getPlainType(t1_type.element_type);
-    // const t1_size_expr = ast.getExpr(t1_type.size.static).construct;
-    // const t1_size_expr_comps = ast.getExprRange(t1_size_expr.components.multi);
+    const expr_left = ast.getExpr(expr.left).binary;
+    const expr_left_left = ast.getExpr(expr_left.left).binary;
+    const expr_left_left_left = ast.getExpr(expr_left_left.left).literal;
+    const expr_left_left_right = ast.getExpr(expr_left_left.right).literal;
+    const expr_left_right = ast.getExpr(expr_left.right).binary;
+    const expr_left_right_left = ast.getExpr(expr_left_right.left).literal;
+    const expr_left_right_right = ast.getExpr(expr_left_right.right).literal;
 
-    // try expectEqual(Ast.ScalarType.i32, t1_elem_type.scalar);
-    // try expectEqual(Ast.VectorType.Size.tri, t1_size_expr.type.vector.partial.size);
-    // try expectEqual(@as(i64, 1), t1_size_expr_comps[0].literal.number.abstract_int);
-    // try expectEqual(@as(i64, 2), t1_size_expr_comps[1].literal.number.abstract_int);
-    // try expectEqual(@as(i64, 3), t1_size_expr_comps[2].literal.number.abstract_int);
+    const expr_right = ast.getExpr(expr.right).binary;
+    const expr_right_left = ast.getExpr(expr_right.left).literal;
+    const expr_right_right = ast.getExpr(expr_right.right).literal;
 
-    // const t1_dest_type = ast.getGlobal(1).type_alias.type.array;
-    // const t1_expr = ast.getPlainType(t1_type.element_type);
+    try expect(expr_left.op == .add);
+    try expect(expr_right.op == .shift_right);
+    try expect(expr_left_left.op == .add);
+    try expect(expr_left_right.op == .multiply);
+    try expect(expr_left_left_left.number.abstract_int == 1);
+    try expect(expr_left_left_right.number.abstract_int == 5);
+    try expect(expr_left_right_left.number.abstract_int == 2);
+    try expect(expr_left_right_right.number.abstract_int == 3);
+    try expect(expr_right_left.number.abstract_int == 6);
+    try expect(expr_right_right.number.abstract_int == 7);
 }

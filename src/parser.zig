@@ -716,18 +716,14 @@ const Parser = struct {
         }
     }
 
-    /// Expr
+    /// ShortCircuitExpr
     ///   : RelationalExpr
-    ///   | BitwiseExpr
-    ///   | RelationalExpr AND_AND RelationalExpr
-    ///   | RelationalExpr OR_OR   RelationalExpr
-    pub fn expression(self: *Parser) !Ast.Index(Ast.Expression) {
-        const left_unary = try self.unaryExpr();
-        if (self.bitwiseExpr(left_unary)) |bitwise| {
-            return bitwise;
-        } else |err| if (err != error.Parsing) return err;
-
-        var left = try self.relationalExpr(left_unary);
+    ///   | RelationalExpr (AND_AND RelationalExpr)*
+    ///   | RelationalExpr (OR_OR   RelationalExpr)*
+    ///
+    /// expects first expression ( UnaryExpr )
+    pub fn shortCircuitExpr(self: *Parser, left_relational: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+        var left = left_relational;
 
         const op_token = self.current_token;
         const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
@@ -756,6 +752,21 @@ const Parser = struct {
         }
 
         return left;
+    }
+
+    /// Expr
+    ///   : RelationalExpr
+    ///   | BitwiseExpr
+    ///   | RelationalExpr AND_AND RelationalExpr
+    ///   | RelationalExpr OR_OR   RelationalExpr
+    pub fn expression(self: *Parser) !Ast.Index(Ast.Expression) {
+        const left_unary = try self.unaryExpr();
+        if (self.bitwiseExpr(left_unary)) |bitwise| {
+            return bitwise;
+        } else |err| if (err != error.Parsing) return err;
+
+        const left = try self.relationalExpr(left_unary);
+        return self.shortCircuitExpr(left);
     }
 
     pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {

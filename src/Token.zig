@@ -396,62 +396,6 @@ pub const Tag = enum {
             .keyword_while => "while",
         };
     }
-
-    pub const Group = enum {
-        ident,
-        scalar,
-        literal,
-        vector,
-        matrix,
-        sampler,
-        array,
-        atomic,
-        other,
-    };
-
-    pub fn group(self: Tag) Group {
-        return switch (self) {
-            .ident => .ident,
-
-            .keyword_i32,
-            .keyword_u32,
-            .keyword_f32,
-            .keyword_f16,
-            .keyword_bool,
-            => .scalar,
-
-            .number,
-            .keyword_true,
-            .keyword_false,
-            => .literal,
-
-            .keyword_vec2,
-            .keyword_vec3,
-            .keyword_vec4,
-            => .vector,
-
-            .keyword_mat2x2,
-            .keyword_mat2x3,
-            .keyword_mat2x4,
-            .keyword_mat3x2,
-            .keyword_mat3x3,
-            .keyword_mat3x4,
-            .keyword_mat4x2,
-            .keyword_mat4x3,
-            .keyword_mat4x4,
-            => .matrix,
-
-            .keyword_sampler,
-            .keyword_comparison_sampler,
-            => .sampler,
-
-            .keyword_array => .array,
-
-            .keyword_atomic => .atomic,
-
-            else => .other,
-        };
-    }
 };
 
 pub const keywords = std.ComptimeStringMap(Tag, .{

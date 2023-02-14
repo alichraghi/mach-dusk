@@ -393,6 +393,7 @@ const Parser = struct {
                 } });
             },
             .keyword_bitcast => {
+                _ = self.next();
                 _ = try self.expectToken(.less_than);
                 const dest_type = try self.expectTypeSpecifier();
                 _ = try self.expectToken(.greater_than);
@@ -401,7 +402,8 @@ const Parser = struct {
             },
             .paren_left => return self.expectParenExpr(),
             .ident => {
-                if (self.peek().tag == .paren_left) {
+                _ = self.next();
+                if (self.current_token.tag == .paren_left) {
                     const args = try self.expectArgumentExprList();
                     return try self.addExpr(.{ .call = .{
                         .callable = .{ .ident = token.loc.asStr(self.source) },
@@ -438,30 +440,29 @@ const Parser = struct {
     ///   | MatrixPrefix
     ///   | VectorPrefix
     pub fn callable(self: *Parser) !Ast.CallExpr.Callable {
-        if (self.typeSpecifierWithoutIdent()) |ty_i| {
-            switch (self.ast.getType(ty_i)) {
-                .scalar => |p| return .{ .scalar = p },
-                .vector => |p| return .{ .vector = p },
-                .matrix => |p| return .{ .matrix = p },
-                .array => |p| return .{ .array = p },
-                else => return error.Parsing,
+        if (self.peek().tag != .less_than) {
+            if (self.vectorPrefix()) |vec|
+                return .{ .partial_vector = vec }
+            else |_| {}
+
+            if (self.matrixPrefix()) |mat|
+                return .{ .partial_matrix = mat }
+            else |_| {}
+
+            if (self.current_token.tag == .keyword_array) {
+                _ = self.next();
+                return .partial_array;
             }
-        } else |err| if (err != error.Parsing) return error.Parsing;
-
-        if (self.vectorPrefix()) |vec|
-            return .{ .partial_vector = vec }
-        else |_| {}
-
-        if (self.matrixPrefix()) |mat|
-            return .{ .partial_matrix = mat }
-        else |_| {}
-
-        if (self.current_token.tag == .keyword_array) {
-            _ = self.next();
-            return .partial_array;
         }
 
-        return error.Parsing;
+        const constructor = try self.typeSpecifierWithoutIdent();
+        switch (self.ast.getType(constructor)) {
+            .scalar => |p| return .{ .scalar = p },
+            .vector => |p| return .{ .vector = p },
+            .matrix => |p| return .{ .matrix = p },
+            .array => |p| return .{ .array = p },
+            else => return error.Parsing,
+        }
     }
 
     /// ArgumentExprList : PAREN_LEFT ((Expr COMMA)* Expr COMMA?)? PAREN_RIGHT
@@ -474,6 +475,7 @@ const Parser = struct {
                 if (err == error.Parsing) break;
                 return err;
             };
+
             args.append(expr) catch {
                 self.addError(
                     expr_token.loc,
@@ -483,9 +485,9 @@ const Parser = struct {
                 );
                 return error.Parsing;
             };
-            if (self.current_token.tag != .comma) break;
+
+            if (self.next().tag == .paren_right) break;
         }
-        _ = try self.expectToken(.paren_right);
 
         try self.ast.extra.appendSlice(self.allocator, args.slice());
         return .{
@@ -894,8 +896,25 @@ const Parser = struct {
 };
 
 const expect = std.testing.expect;
-test {
+
+test Parser {
     std.testing.refAllDeclsRecursive(Parser);
+}
+
+test "no errors" {
+    const source =
+        \\let expr = vec3<f32>(vec2(1, 5), 3);
+        \\let expr = bitcast<f32>(5);
+        \\let expr = ~(-(!false));
+        \\let expr = expr;
+        \\let expr = expr(expr);
+    ;
+
+    var ast = try parse(std.testing.allocator, source, null);
+    defer ast.deinit(std.testing.allocator);
+}
+
+test "expressions" {
     const source =
         \\let expr = 1 + 5 + 2 * 3 > 6 >> 7;
     ;
@@ -927,4 +946,19 @@ test {
     try expect(expr_left_right_right.number.abstract_int == 3);
     try expect(expr_right_left.number.abstract_int == 6);
     try expect(expr_right_right.number.abstract_int == 7);
+}
+
+test "type alias" {
+    const source =
+        \\type my_type = vec3<f32>;
+    ;
+
+    var ast = try parse(std.testing.allocator, source, null);
+    defer ast.deinit(std.testing.allocator);
+
+    const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
+    const vec3_elements_type = ast.getType(vec3.vector.element);
+
+    try expect(vec3.vector.prefix == .vec3);
+    try expect(vec3_elements_type.scalar == .f32);
 }

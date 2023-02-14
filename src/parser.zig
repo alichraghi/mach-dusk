@@ -92,7 +92,17 @@ const Parser = struct {
                 const name = try self.expectToken(.ident);
                 const optional_type = try self.optionalType();
                 _ = try self.expectToken(.equal);
-                const value = try self.expression();
+                const value = self.expression() catch |err| {
+                    if (err == error.Parsing) {
+                        self.addError(
+                            self.current_token.loc,
+                            "expected initializer expression, found '{s}'",
+                            .{self.current_token.tag.symbol()},
+                            &.{},
+                        );
+                    }
+                    return err;
+                };
                 _ = try self.expectToken(.semicolon);
                 return .{
                     .constant = false,
@@ -101,9 +111,6 @@ const Parser = struct {
                     .value = value,
                 };
             },
-
-            // TODO
-
             else => return error.Parsing,
         }
     }

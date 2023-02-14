@@ -277,13 +277,12 @@ pub const Tag = enum {
     /// 'while'
     keyword_while,
 
-    pub fn lexeme(self: Tag) ?[]const u8 {
+    pub fn symbol(self: Tag) []const u8 {
         return switch (self) {
-            .eof,
-            .invalid,
-            .ident,
-            .number,
-            => null,
+            .eof => "EOF",
+            .invalid => "invalid bytes",
+            .ident => "an identifier",
+            .number => "a number literal",
             .@"and" => "&",
             .and_and => "&&",
             .arrow => "->",
@@ -395,16 +394,6 @@ pub const Tag = enum {
             .keyword_vec3 => "vec3",
             .keyword_vec4 => "vec4",
             .keyword_while => "while",
-        };
-    }
-
-    pub fn symbol(self: Tag) []const u8 {
-        return self.lexeme() orelse switch (self) {
-            .eof => "EOF",
-            .invalid => "invalid bytes",
-            .ident => "an identifier",
-            .number => "a number literal",
-            else => unreachable,
         };
     }
 

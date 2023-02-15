@@ -48,23 +48,39 @@ pub fn Index(comptime _: type) type {
 }
 
 pub const GlobalDecl = union(enum) {
-    variable: VariableStatement,
+    variable: Variable,
     function: Function,
-    constant: Const,
     strct: Struct,
     type_alias: TypeAlias,
 };
 
-pub const VariableStatement = struct {
-    constant: bool,
+pub const Variable = struct {
+    // scope: Scope,
     name: []const u8,
+    addr_space: ?AddressSpace,
+    access: ?AccessMode,
     type: ?Index(Type),
-    value: Index(Expression),
+    value: ?Index(Expression),
+
+    pub const Qualifier = struct {
+        addr_space: AddressSpace,
+        access: ?AccessMode,
+    };
+
+    pub const DeclInfo = struct {
+        name: []const u8,
+        type: ?Index(Type),
+        qualifier: ?Qualifier,
+    };
+
+    // pub const Scope = enum {
+    //     module,
+    //     function,
+    //     module_or_function,
+    // };
 };
 
 pub const Function = struct {};
-
-pub const Const = struct {};
 
 pub const Struct = struct {};
 
@@ -283,6 +299,10 @@ pub const Type = union(enum) {
                     .mat2x4, .mat3x4, .mat4x4 => 4,
                 };
             }
+
+            pub fn dimensions(self: Prefix) u6 {
+                return self.cols() * self.rows();
+            }
         };
     };
 
@@ -310,4 +330,14 @@ pub const Type = union(enum) {
         type: Index(Type),
         access: ?AccessMode,
     };
+};
+
+pub const TypedIdent = struct {
+    name: []const u8,
+    type: Index(Type),
+};
+
+pub const OptionalyTypedIdent = struct {
+    name: []const u8,
+    type: ?Index(Type),
 };

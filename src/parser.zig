@@ -1238,10 +1238,12 @@ test "no errors" {
         \\;
         \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
         \\var<storage> expr = bitcast<f32>(5);
+        \\var expr;
         \\var expr = ~(-(!false));
         \\var expr = expr;
         \\var expr = expr(expr);
         \\const hello = 1;
+        \\override hello;
         \\type the_type = ptr<workgroup, f32, read>;
         \\type the_type = array<f32, expr>;
         \\type the_type = vec3<f32>;

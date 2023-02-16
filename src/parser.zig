@@ -51,35 +51,19 @@ const Parser = struct {
     /// GlobalDecl
     ///   : SEMICOLON
     ///   | GlobalVariableDecl   SEMICOLON
-    ///   | GlobalConstDecl      SEMICOLON           TODO
+    ///   | GlobalConstDecl      SEMICOLON
+    ///   | GlobalOverrideDecl   SEMICOLON
     ///   | TypeAliasDecl        SEMICOLON
     ///   | StructDecl                               TODO
     ///   | FunctionDecl                             TODO
     ///   | ConstAssertStatement SEMICOLON           TODO
     pub fn globalDecl(self: *Parser) !void {
-        if (try self.typeAliasDecl()) |type_alias| {
-            try self.addGlobal(.{ .type_alias = type_alias });
-        }
-
-        if (try self.globalVarDecl()) |variable| {
-            try self.addGlobal(.{ .variable = variable });
-        }
-
-        if (try self.globalConstDecl()) |const_decl| {
-            try self.addGlobal(.{ .@"const" = const_decl });
-        }
-
-        _ = try self.expectToken(.semicolon);
-    }
-
-    pub fn attributeList(self: *Parser) ![]const Ast.Attribute {
         const max_attrs = std.meta.fields(Ast.Attribute).len;
 
         var attrs = try std.ArrayList(Ast.Attribute).initCapacity(self.allocator, max_attrs);
-        errdefer attrs.deinit();
-
         while (true) {
             if (attrs.items.len >= max_attrs) {
+                attrs.deinit();
                 self.addError(
                     self.current_token.loc,
                     "exceeded maximum attributes per declaration ({})",
@@ -92,8 +76,31 @@ const Parser = struct {
             const attr = try self.attribute() orelse break;
             attrs.appendAssumeCapacity(attr);
         }
+        const attrs_slice = try attrs.toOwnedSlice();
+        errdefer self.allocator.free(attrs_slice);
 
-        return attrs.toOwnedSlice();
+        if (try self.typeAliasDecl()) |type_alias| {
+            try self.addGlobal(.{ .type_alias = type_alias });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.globalVarDecl(attrs_slice)) |variable| {
+            try self.addGlobal(.{ .variable = variable });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.globalConstDecl()) |const_decl| {
+            try self.addGlobal(.{ .@"const" = const_decl });
+            _ = try self.expectToken(.semicolon);
+        } else {
+            if (attrs_slice.len > 0) {
+                self.addError(
+                    self.current_token.loc,
+                    "expected global declaration, found '{s}'",
+                    .{self.current_token.tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+            _ = try self.expectToken(.semicolon);
+            return;
+        }
     }
 
     /// Attribute :
@@ -334,8 +341,7 @@ const Parser = struct {
     }
 
     /// GlobalVarDecl : Attribute* VariableDecl (EQUAL Expr)?
-    pub fn globalVarDecl(self: *Parser) !?Ast.Variable {
-        const attrs = try self.attributeList();
+    pub fn globalVarDecl(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Variable {
         const decl = try self.variableDecl() orelse return null;
         const initializer = if (self.eatToken(.equal)) |_|
             try self.expression() orelse {
@@ -1201,6 +1207,7 @@ test Parser {
 
 test "no errors" {
     const source =
+        \\;
         \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
         \\var<storage> expr = bitcast<f32>(5);
         \\var expr = ~(-(!false));

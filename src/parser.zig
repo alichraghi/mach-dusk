@@ -54,10 +54,43 @@ const Parser = struct {
     ///   | GlobalConstDecl      SEMICOLON
     ///   | GlobalOverrideDecl   SEMICOLON
     ///   | TypeAliasDecl        SEMICOLON
-    ///   | StructDecl                               TODO
+    ///   | StructDecl
     ///   | FunctionDecl                             TODO
     ///   | ConstAssertStatement SEMICOLON           TODO
     pub fn globalDecl(self: *Parser) !void {
+        const attrs = try self.attributeList();
+        errdefer self.allocator.free(attrs);
+
+        if (try self.typeAliasDecl()) |type_alias| {
+            try self.addGlobal(.{ .type_alias = type_alias });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.globalVarDecl(attrs)) |variable| {
+            try self.addGlobal(.{ .variable = variable });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.globalConstDecl()) |const_decl| {
+            try self.addGlobal(.{ .@"const" = const_decl });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.globalOverrideDecl(attrs)) |override| {
+            try self.addGlobal(.{ .override = override });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.structDecl()) |strct| {
+            try self.addGlobal(.{ .@"struct" = strct });
+        } else {
+            if (attrs.len > 0) {
+                self.addError(
+                    self.current_token.loc,
+                    "expected global declaration, found '{s}'",
+                    .{self.current_token.tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+            _ = try self.expectToken(.semicolon);
+            return;
+        }
+    }
+
+    pub fn attributeList(self: *Parser) ![]const Ast.Attribute {
         const max_attrs = std.meta.fields(Ast.Attribute).len;
 
         var attrs = try std.ArrayList(Ast.Attribute).initCapacity(self.allocator, max_attrs);
@@ -76,34 +109,8 @@ const Parser = struct {
             const attr = try self.attribute() orelse break;
             attrs.appendAssumeCapacity(attr);
         }
-        const attrs_slice = try attrs.toOwnedSlice();
-        errdefer self.allocator.free(attrs_slice);
 
-        if (try self.typeAliasDecl()) |type_alias| {
-            try self.addGlobal(.{ .type_alias = type_alias });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.globalVarDecl(attrs_slice)) |variable| {
-            try self.addGlobal(.{ .variable = variable });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.globalConstDecl()) |const_decl| {
-            try self.addGlobal(.{ .@"const" = const_decl });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.globalOverrideDecl(attrs_slice)) |override| {
-            try self.addGlobal(.{ .override = override });
-            _ = try self.expectToken(.semicolon);
-        } else {
-            if (attrs_slice.len > 0) {
-                self.addError(
-                    self.current_token.loc,
-                    "expected global declaration, found '{s}'",
-                    .{self.current_token.tag.symbol()},
-                    &.{},
-                );
-                return error.Parsing;
-            }
-            _ = try self.expectToken(.semicolon);
-            return;
-        }
+        return attrs.toOwnedSlice();
     }
 
     /// Attribute :
@@ -412,6 +419,55 @@ const Parser = struct {
             .name = ident.name,
             .type = ident.type,
             .value = expr,
+            .attrs = attrs,
+        };
+    }
+
+    /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
+    pub fn structDecl(self: *Parser) !?Ast.Struct {
+        if (self.eatToken(.keyword_struct) == null) return null;
+        const name = try self.expectToken(.ident);
+        _ = try self.expectToken(.brace_left);
+
+        var members = std.ArrayList(Ast.Struct.Member).init(self.allocator);
+        errdefer members.deinit();
+
+        while (true) {
+            const attrs = try self.attributeList();
+            errdefer self.allocator.free(attrs);
+
+            const member = try self.structMember(attrs) orelse {
+                if (attrs.len > 0) {
+                    self.addError(
+                        self.current_token.loc,
+                        "expected struct member, found '{s}'",
+                        .{self.current_token.tag.symbol()},
+                        &.{},
+                    );
+                    return error.Parsing;
+                }
+                break;
+            };
+            try members.append(member);
+            _ = self.eatToken(.comma);
+        }
+
+        _ = try self.expectToken(.brace_right);
+
+        return .{
+            .name = name.loc.asStr(self.source),
+            .members = try members.toOwnedSlice(),
+        };
+    }
+
+    /// StructMember : Attribute* TypedIdent
+    pub fn structMember(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Struct.Member {
+        const name = self.eatToken(.ident) orelse return null;
+        _ = try self.expectToken(.colon);
+        const member_type = try self.expectTypeSpecifier();
+        return .{
+            .name = name.loc.asStr(self.source),
+            .type = member_type,
             .attrs = attrs,
         };
     }
@@ -1228,6 +1284,7 @@ const Parser = struct {
 };
 
 const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
 
 test Parser {
     std.testing.refAllDeclsRecursive(Parser);
@@ -1251,13 +1308,16 @@ test "no errors" {
         \\type the_type = mat2x3<f32>;
         \\type the_type = atomic<u32>;
         \\type the_type = sampler;
+        \\struct S {
+        \\  @group(0) s: u32,
+        \\}
     ;
 
     var ast = try parse(std.testing.allocator, source, null);
     defer ast.deinit(std.testing.allocator);
 }
 
-test "expressions" {
+test "variable & expressions" {
     const source =
         \\var expr = 1 + 5 + 2 * 3 > 6 >> 7;
     ;
@@ -1304,6 +1364,24 @@ test "type alias" {
 
     try expect(vec3.vector.prefix == .vec3);
     try expect(vec3_elements_type.scalar == .f32);
+}
+
+test "struct" {
+    const source =
+        \\struct S { s: u32 }
+    ;
+
+    var ast = try parse(std.testing.allocator, source, null);
+    defer ast.deinit(std.testing.allocator);
+
+    const strct = ast.getGlobal(0).@"struct";
+    const strct_member_s = strct.members[0];
+    const strct_member_s_type = ast.getType(strct_member_s.type).scalar;
+
+    try expect(strct.members.len == 1);
+    try expectEqualStrings("S", strct.name);
+    try expectEqualStrings("s", strct_member_s.name);
+    try expect(strct_member_s_type == .u32);
 }
 
 test "research" {

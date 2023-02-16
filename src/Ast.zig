@@ -17,8 +17,10 @@ types: std.ArrayListUnmanaged(Type) = .{},
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     for (self.globals.items) |global| {
         switch (global) {
-            .variable => |variable| {
-                allocator.free(variable.attrs);
+            .variable => |v| allocator.free(v.attrs),
+            .@"struct" => |s| {
+                for (s.members) |member| allocator.free(member.attrs);
+                allocator.free(s.members);
             },
             else => {},
         }
@@ -152,7 +154,17 @@ pub const Override = struct {
 
 pub const Function = struct {};
 
-pub const Struct = struct {};
+pub const Struct = struct {
+    name: []const u8,
+    members: []const Member,
+
+    pub const Member = struct {
+        name: []const u8,
+        type: Index(Type),
+        /// allocated
+        attrs: []const Attribute,
+    };
+};
 
 pub const AddressSpace = enum {
     function,

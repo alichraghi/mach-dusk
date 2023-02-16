@@ -59,6 +59,7 @@ pub fn Index(comptime _: type) type {
 pub const GlobalDecl = union(enum) {
     variable: Variable,
     @"const": Const,
+    override: Override,
     function: Function,
     @"struct": Struct,
     type_alias: TypeAlias,

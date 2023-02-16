@@ -88,6 +88,9 @@ const Parser = struct {
         } else if (try self.globalConstDecl()) |const_decl| {
             try self.addGlobal(.{ .@"const" = const_decl });
             _ = try self.expectToken(.semicolon);
+        } else if (try self.globalOverrideDecl(attrs_slice)) |override| {
+            try self.addGlobal(.{ .override = override });
+            _ = try self.expectToken(.semicolon);
         } else {
             if (attrs_slice.len > 0) {
                 self.addError(
@@ -385,6 +388,31 @@ const Parser = struct {
             .name = ident.name,
             .type = ident.type,
             .value = expr,
+        };
+    }
+
+    /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
+    pub fn globalOverrideDecl(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Override {
+        if (self.eatToken(.keyword_override) == null) return null;
+        const ident = try self.expectOptionalyTypedIdent();
+        const expr = if (self.eatToken(.equal)) |_|
+            try self.expression() orelse {
+                self.addError(
+                    self.current_token.loc,
+                    "expected initializer expression, found '{s}'",
+                    .{self.current_token.tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+        else
+            null;
+
+        return .{
+            .name = ident.name,
+            .type = ident.type,
+            .value = expr,
+            .attrs = attrs,
         };
     }
 

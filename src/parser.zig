@@ -831,7 +831,6 @@ const Parser = struct {
         while (true) {
             const expr_token = self.current_token;
             const expr = try self.expression() orelse break;
-
             args.append(expr) catch {
                 self.addError(
                     expr_token.loc,
@@ -842,8 +841,9 @@ const Parser = struct {
                 return error.Parsing;
             };
 
-            if (self.next().tag == .paren_right) break;
+            if (self.eatToken(.comma) == null) break;
         }
+        _ = try self.expectToken(.paren_right);
 
         try self.ast.extra.appendSlice(self.allocator, args.slice());
         return .{
@@ -1239,6 +1239,7 @@ test "no errors" {
         \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
         \\var<storage> expr = bitcast<f32>(5);
         \\var expr;
+        \\var expr = bool();
         \\var expr = ~(-(!false));
         \\var expr = expr;
         \\var expr = expr(expr);

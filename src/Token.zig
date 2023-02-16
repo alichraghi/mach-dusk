@@ -220,8 +220,8 @@ pub const Tag = enum {
     keyword_sampler,
     /// 'sampler_comparison'
     keyword_comparison_sampler,
-    /// 'static_assert'
-    keyword_static_assert,
+    /// 'const_assert'
+    keyword_const_assert,
     /// 'struct'
     keyword_struct,
     /// 'switch'
@@ -366,7 +366,7 @@ pub const Tag = enum {
             .keyword_return => "return",
             .keyword_sampler => "sampler",
             .keyword_comparison_sampler => "sampler_comparison",
-            .keyword_static_assert => "static_assert",
+            .keyword_const_assert => "const_assert",
             .keyword_struct => "struct",
             .keyword_switch => "switch",
             .keyword_texture_depth_2d => "texture_depth_2d",
@@ -436,7 +436,7 @@ pub const keywords = std.ComptimeStringMap(Tag, .{
     .{ "return", .keyword_return },
     .{ "sampler", .keyword_sampler },
     .{ "sampler_comparison", .keyword_comparison_sampler },
-    .{ "static_assert", .keyword_static_assert },
+    .{ "const_assert", .keyword_const_assert },
     .{ "struct", .keyword_struct },
     .{ "switch", .keyword_switch },
     .{ "texture_depth_2d", .keyword_texture_depth_2d },

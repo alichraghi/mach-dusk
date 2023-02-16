@@ -65,6 +65,7 @@ pub const GlobalDecl = union(enum) {
     function: Function,
     @"struct": Struct,
     type_alias: TypeAlias,
+    const_assert: Index(Expression),
 };
 
 pub const Attribute = union(enum) {

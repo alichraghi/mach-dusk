@@ -55,8 +55,8 @@ const Parser = struct {
     ///   | GlobalOverrideDecl   SEMICOLON
     ///   | TypeAliasDecl        SEMICOLON
     ///   | StructDecl
-    ///   | FunctionDecl                             TODO
-    ///   | ConstAssertStatement SEMICOLON           TODO
+    ///   | FunctionDecl         TODO
+    ///   | ConstAssertStatement SEMICOLON
     pub fn globalDecl(self: *Parser) !void {
         const attrs = try self.attributeList();
         errdefer self.allocator.free(attrs);
@@ -75,6 +75,8 @@ const Parser = struct {
             _ = try self.expectToken(.semicolon);
         } else if (try self.structDecl()) |strct| {
             try self.addGlobal(.{ .@"struct" = strct });
+        } else if (try self.constAssert()) |assert| {
+            try self.addGlobal(.{ .const_assert = assert });
         } else {
             if (attrs.len > 0) {
                 self.addError(
@@ -471,6 +473,19 @@ const Parser = struct {
             .name = name.loc.asStr(self.source),
             .type = member_type,
             .attrs = attrs,
+        };
+    }
+
+    pub fn constAssert(self: *Parser) !?Ast.Index(Ast.Expression) {
+        _ = self.eatToken(.keyword_const_assert) orelse return null;
+        return try self.expression() orelse {
+            self.addError(
+                self.current_token.loc,
+                "expected expression, found '{s}'",
+                .{self.current_token.tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
         };
     }
 
@@ -1311,8 +1326,9 @@ test "no errors" {
         \\type the_type = atomic<u32>;
         \\type the_type = sampler;
         \\struct S {
-        \\  @urmom(0) s: u32,
+        \\  s: u32,
         \\}
+        \\const_assert 2 > 1;
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

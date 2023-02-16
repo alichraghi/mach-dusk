@@ -94,6 +94,8 @@ const Parser = struct {
         const max_attrs = std.meta.fields(Ast.Attribute).len;
 
         var attrs = try std.ArrayList(Ast.Attribute).initCapacity(self.allocator, max_attrs);
+        errdefer attrs.deinit();
+
         while (true) {
             if (attrs.items.len >= max_attrs) {
                 attrs.deinit();
@@ -1309,7 +1311,7 @@ test "no errors" {
         \\type the_type = atomic<u32>;
         \\type the_type = sampler;
         \\struct S {
-        \\  @group(0) s: u32,
+        \\  @urmom(0) s: u32,
         \\}
     ;
 

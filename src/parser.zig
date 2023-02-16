@@ -49,13 +49,13 @@ const Parser = struct {
     }
 
     /// GlobalDecl
-    ///  : SEMICOLON
-    ///  | GlobalVariableDecl   SEMICOLON
-    ///  | GlobalConstDecl      SEMICOLON           TODO
-    ///  | TypeAliasDecl        SEMICOLON
-    ///  | StructDecl                               TODO
-    ///  | FunctionDecl                             TODO
-    ///  | ConstAssertStatement SEMICOLON           TODO
+    ///   : SEMICOLON
+    ///   | GlobalVariableDecl   SEMICOLON
+    ///   | GlobalConstDecl      SEMICOLON           TODO
+    ///   | TypeAliasDecl        SEMICOLON
+    ///   | StructDecl                               TODO
+    ///   | FunctionDecl                             TODO
+    ///   | ConstAssertStatement SEMICOLON           TODO
     pub fn globalDecl(self: *Parser) !void {
         if (try self.typeAliasDecl()) |type_alias| {
             try self.addGlobal(.{ .type_alias = type_alias });
@@ -63,6 +63,10 @@ const Parser = struct {
 
         if (try self.globalVarDecl()) |variable| {
             try self.addGlobal(.{ .variable = variable });
+        }
+
+        if (try self.globalConstDecl()) |const_decl| {
+            try self.addGlobal(.{ .@"const" = const_decl });
         }
 
         _ = try self.expectToken(.semicolon);
@@ -329,8 +333,7 @@ const Parser = struct {
         return error.Parsing;
     }
 
-    /// GlobalVarDecl
-    ///  : Attribute* VariableDecl (EQUAL Expr)?
+    /// GlobalVarDecl : Attribute* VariableDecl (EQUAL Expr)?
     pub fn globalVarDecl(self: *Parser) !?Ast.Variable {
         const attrs = try self.attributeList();
         const decl = try self.variableDecl() orelse return null;
@@ -348,23 +351,44 @@ const Parser = struct {
             null;
 
         return .{
-            .name = decl.name,
+            .name = decl.ident.name,
             .value = initializer,
             .addr_space = if (decl.qualifier) |q| q.addr_space else null,
             .access = if (decl.qualifier) |q| q.access else null,
-            .type = decl.type,
+            .type = decl.ident.type,
             .attrs = attrs,
         };
     }
 
-    // VariableDecl : VAR VariableQualifier? OptionalyTypedIdent
+    /// GlobalConstDecl : CONST OptionalyTypedIdent EQUAL Expr
+    pub fn globalConstDecl(self: *Parser) !?Ast.Const {
+        if (self.eatToken(.keyword_const) == null) return null;
+        const ident = try self.expectOptionalyTypedIdent();
+        _ = try self.expectToken(.equal);
+        const expr = try self.expression() orelse {
+            self.addError(
+                self.current_token.loc,
+                "expected initializer expression, found '{s}'",
+                .{self.current_token.tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+
+        return .{
+            .name = ident.name,
+            .type = ident.type,
+            .value = expr,
+        };
+    }
+
+    /// VariableDecl : VAR VariableQualifier? OptionalyTypedIdent
     pub fn variableDecl(self: *Parser) !?Ast.Variable.DeclInfo {
         if (self.eatToken(.keyword_var) == null) return null;
         const qualifier = try self.variableQualifier();
         const opt_type_id = try self.expectOptionalyTypedIdent();
         return .{
-            .name = opt_type_id.name,
-            .type = opt_type_id.type,
+            .ident = opt_type_id,
             .qualifier = qualifier,
         };
     }
@@ -1178,10 +1202,11 @@ test Parser {
 test "no errors" {
     const source =
         \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
-        \\var expr = bitcast<f32>(5);
+        \\var<storage> expr = bitcast<f32>(5);
         \\var expr = ~(-(!false));
         \\var expr = expr;
         \\var expr = expr(expr);
+        \\const hello = 1;
         \\type the_type = ptr<workgroup, f32, read>;
         \\type the_type = array<f32, expr>;
         \\type the_type = vec3<f32>;

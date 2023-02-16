@@ -8,7 +8,8 @@ const Ast = @This();
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 /// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
-/// Contains expression's that a GlobalDecl in `globals` may need
+/// Contains index of expression's extra info,
+/// like function call arguments expressions
 extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(Type) = .{},
@@ -57,6 +58,7 @@ pub fn Index(comptime _: type) type {
 
 pub const GlobalDecl = union(enum) {
     variable: Variable,
+    @"const": Const,
     function: Function,
     @"struct": Struct,
     type_alias: TypeAlias,
@@ -114,7 +116,6 @@ pub const Attribute = union(enum) {
 };
 
 pub const Variable = struct {
-    // scope: Scope,
     name: []const u8,
     addr_space: ?AddressSpace,
     access: ?AccessMode,
@@ -123,22 +124,29 @@ pub const Variable = struct {
     /// allocated
     attrs: []const Attribute,
 
+    pub const DeclInfo = struct {
+        ident: OptionalyTypedIdent,
+        qualifier: ?Qualifier,
+    };
+
     pub const Qualifier = struct {
         addr_space: AddressSpace,
         access: ?AccessMode,
     };
+};
 
-    pub const DeclInfo = struct {
-        name: []const u8,
-        type: ?Index(Type),
-        qualifier: ?Qualifier,
-    };
+pub const Const = struct {
+    name: []const u8,
+    type: ?Index(Type),
+    value: ?Index(Expression),
+};
 
-    // pub const Scope = enum {
-    //     module,
-    //     function,
-    //     module_or_function,
-    // };
+pub const Override = struct {
+    name: []const u8,
+    type: ?Index(Type),
+    value: ?Index(Expression),
+    /// allocated
+    attrs: []const Attribute,
 };
 
 pub const Function = struct {};

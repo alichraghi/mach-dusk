@@ -59,7 +59,6 @@ const Parser = struct {
     ///   | ConstAssertStatement SEMICOLON
     pub fn globalDecl(self: *Parser) !void {
         const attrs = try self.attributeList();
-        errdefer self.allocator.free(attrs);
 
         if (try self.typeAliasDecl()) |type_alias| {
             try self.addGlobal(.{ .type_alias = type_alias });
@@ -77,8 +76,11 @@ const Parser = struct {
             try self.addGlobal(.{ .@"struct" = strct });
         } else if (try self.constAssert()) |assert| {
             try self.addGlobal(.{ .const_assert = assert });
+            _ = try self.expectToken(.semicolon);
+        } else if (try self.functionDecl(attrs)) |func| {
+            try self.addGlobal(.{ .function = func });
         } else {
-            if (attrs.len > 0) {
+            if (attrs != null) {
                 self.addError(
                     self.current_token.loc,
                     "expected global declaration, found '{s}'",
@@ -92,15 +94,11 @@ const Parser = struct {
         }
     }
 
-    pub fn attributeList(self: *Parser) ![]const Ast.Attribute {
+    pub fn attributeList(self: *Parser) !?Ast.Range(Ast.Attribute) {
         const max_attrs = std.meta.fields(Ast.Attribute).len;
-
-        var attrs = try std.ArrayList(Ast.Attribute).initCapacity(self.allocator, max_attrs);
-        errdefer attrs.deinit();
-
+        var attrs = std.BoundedArray(Ast.Attribute, max_attrs).init(0) catch unreachable;
         while (true) {
-            if (attrs.items.len >= max_attrs) {
-                attrs.deinit();
+            if (attrs.len >= max_attrs) {
                 self.addError(
                     self.current_token.loc,
                     "exceeded maximum attributes per declaration ({})",
@@ -114,7 +112,8 @@ const Parser = struct {
             attrs.appendAssumeCapacity(attr);
         }
 
-        return attrs.toOwnedSlice();
+        if (attrs.len == 0) return null;
+        return try self.addAttrSlice(attrs.slice());
     }
 
     /// Attribute :
@@ -355,7 +354,7 @@ const Parser = struct {
     }
 
     /// GlobalVarDecl : Attribute* VariableDecl (EQUAL Expr)?
-    pub fn globalVarDecl(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Variable {
+    pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Variable {
         const decl = try self.variableDecl() orelse return null;
         const initializer = if (self.eatToken(.equal)) |_|
             try self.expression() orelse {
@@ -403,7 +402,7 @@ const Parser = struct {
     }
 
     /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
-    pub fn globalOverrideDecl(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Override {
+    pub fn globalOverrideDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Override {
         if (self.eatToken(.keyword_override) == null) return null;
         const ident = try self.expectOptionalyTypedIdent();
         const expr = if (self.eatToken(.equal)) |_|
@@ -438,10 +437,8 @@ const Parser = struct {
 
         while (true) {
             const attrs = try self.attributeList();
-            errdefer self.allocator.free(attrs);
-
             const member = try self.structMember(attrs) orelse {
-                if (attrs.len > 0) {
+                if (attrs != null) {
                     self.addError(
                         self.current_token.loc,
                         "expected struct member, found '{s}'",
@@ -465,7 +462,7 @@ const Parser = struct {
     }
 
     /// StructMember : Attribute* TypedIdent
-    pub fn structMember(self: *Parser, attrs: []const Ast.Attribute) !?Ast.Struct.Member {
+    pub fn structMember(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Struct.Member {
         const name = self.eatToken(.ident) orelse return null;
         _ = try self.expectToken(.colon);
         const member_type = try self.expectTypeSpecifier();
@@ -486,6 +483,76 @@ const Parser = struct {
                 &.{},
             );
             return error.Parsing;
+        };
+    }
+
+    /// FunctionDecl : Attribute* FN IDENT LEFT_PAREN ParameterList RIGHT_PAREN (ARROW FunctionResult)?
+    pub fn functionDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Function {
+        if (self.eatToken(.keyword_fn) == null) return null;
+
+        const name = try self.expectToken(.ident);
+
+        _ = try self.expectToken(.paren_left);
+        const params = try self.expectParameterList();
+        _ = try self.expectToken(.paren_right);
+
+        const result = if (self.eatToken(.arrow)) |_|
+            try self.expectFunctionResult()
+        else
+            null;
+
+        return .{
+            .name = name.loc.asStr(self.source),
+            .params = params,
+            .attrs = attrs,
+            .result = result,
+        };
+    }
+
+    /// FunctionResult : Attribute* TypeSpecifier
+    pub fn expectFunctionResult(self: *Parser) !Ast.Function.Result {
+        const attrs = try self.attributeList();
+        const return_type = try self.expectTypeSpecifier();
+        return .{ .attrs = attrs, .type = return_type };
+    }
+
+    /// ParameterList : Parameter (COMMA Param)* COMMA?
+    pub fn expectParameterList(self: *Parser) ![]const Ast.Function.Param {
+        var params = std.ArrayList(Ast.Function.Param).init(self.allocator);
+        errdefer params.deinit();
+
+        while (true) {
+            const param_token = self.current_token;
+            const param = try self.parameter() orelse break;
+            if (params.items.len > max_call_args) {
+                self.addError(
+                    param_token.loc,
+                    "exceeded maximum function parameters ({})",
+                    .{max_call_args},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+            try params.append(param);
+            if (self.eatToken(.comma) == null) break;
+        }
+
+        return params.toOwnedSlice();
+    }
+
+    /// Parameter : Attribute* IDENT COLON TypeSpecifier
+    pub fn parameter(self: *Parser) !?Ast.Function.Param {
+        const attrs = try self.attributeList();
+        const name = if (attrs == null)
+            self.eatToken(.ident) orelse return null
+        else
+            try self.expectToken(.ident);
+        _ = try self.expectToken(.colon);
+        const param_type = try self.expectTypeSpecifier();
+        return .{
+            .name = name.loc.asStr(self.source),
+            .type = param_type,
+            .attrs = attrs,
         };
     }
 
@@ -899,8 +966,9 @@ const Parser = struct {
 
     /// ArgumentExprList : PAREN_LEFT ((Expr COMMA)* Expr COMMA?)? PAREN_RIGHT
     pub fn expectArgumentExprList(self: *Parser) !Ast.Range(Ast.Index(Ast.Expression)) {
-        var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
         _ = try self.expectToken(.paren_left);
+
+        var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
         while (true) {
             const expr_token = self.current_token;
             const expr = try self.expression() orelse break;
@@ -916,13 +984,9 @@ const Parser = struct {
 
             if (self.eatToken(.comma) == null) break;
         }
-        _ = try self.expectToken(.paren_right);
 
-        try self.ast.extra.appendSlice(self.allocator, args.slice());
-        return .{
-            .start = @intCast(u32, self.ast.extra.items.len - args.len),
-            .end = @intCast(u32, self.ast.extra.items.len),
-        };
+        _ = try self.expectToken(.paren_right);
+        return self.addExprExtraSlice(args.slice());
     }
 
     /// ElementCountExpr
@@ -1237,6 +1301,22 @@ const Parser = struct {
         return i;
     }
 
+    pub fn addExprExtraSlice(self: *Parser, slice: []const Ast.Index(Ast.Expression)) std.mem.Allocator.Error!Ast.Range(Ast.Index(Ast.Expression)) {
+        try self.ast.extra.appendSlice(self.allocator, slice);
+        return .{
+            .start = @intCast(u32, self.ast.extra.items.len - slice.len),
+            .end = @intCast(u32, self.ast.extra.items.len),
+        };
+    }
+
+    pub fn addAttrSlice(self: *Parser, slice: []const Ast.Attribute) std.mem.Allocator.Error!Ast.Range(Ast.Attribute) {
+        try self.ast.attrs.appendSlice(self.allocator, slice);
+        return .{
+            .start = @intCast(u32, self.ast.attrs.items.len - slice.len),
+            .end = @intCast(u32, self.ast.attrs.items.len),
+        };
+    }
+
     pub fn addError(self: *Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) void {
         var bw = std.io.bufferedWriter(self.error_file.writer());
         const b = bw.writer();
@@ -1329,6 +1409,7 @@ test "no errors" {
         \\  s: u32,
         \\}
         \\const_assert 2 > 1;
+        \\fn urmom(f: u32) -> u32
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

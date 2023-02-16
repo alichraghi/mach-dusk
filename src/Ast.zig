@@ -13,15 +13,14 @@ expressions: std.ArrayListUnmanaged(Expression) = .{},
 extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(Type) = .{},
+/// Contains declarations attributes
+attrs: std.ArrayListUnmanaged(Attribute) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     for (self.globals.items) |global| {
         switch (global) {
-            .variable => |v| allocator.free(v.attrs),
-            .@"struct" => |s| {
-                for (s.members) |member| allocator.free(member.attrs);
-                allocator.free(s.members);
-            },
+            .@"struct" => |s| allocator.free(s.members),
+            .function => |f| allocator.free(f.params),
             else => {},
         }
     }
@@ -29,6 +28,7 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.expressions.deinit(allocator);
     self.extra.deinit(allocator);
     self.types.deinit(allocator);
+    self.attrs.deinit(allocator);
 }
 
 pub fn getGlobal(self: Ast, i: Index(GlobalDecl)) GlobalDecl {
@@ -125,8 +125,7 @@ pub const Variable = struct {
     access: ?AccessMode,
     type: ?Index(Type),
     value: ?Index(Expression),
-    /// allocated
-    attrs: []const Attribute,
+    attrs: ?Range(Attribute),
 
     pub const DeclInfo = struct {
         ident: OptionalyTypedIdent,
@@ -149,21 +148,42 @@ pub const Override = struct {
     name: []const u8,
     type: ?Index(Type),
     value: ?Index(Expression),
-    /// allocated
-    attrs: []const Attribute,
+    attrs: ?Range(Attribute),
 };
 
-pub const Function = struct {};
+pub const Function = struct {
+    name: []const u8,
+    /// allocated
+    params: []const Param,
+    attrs: ?Range(Attribute),
+    result: ?Result,
+    // block: Block,
+
+    pub const Param = struct {
+        name: []const u8,
+        type: Index(Type),
+        attrs: ?Range(Attribute),
+    };
+
+    pub const Result = struct {
+        type: Index(Type),
+        attrs: ?Range(Attribute),
+    };
+};
+
+pub const Block = []const Statement;
+
+pub const Statement = union(enum) {};
 
 pub const Struct = struct {
     name: []const u8,
+    /// allocated
     members: []const Member,
 
     pub const Member = struct {
         name: []const u8,
         type: Index(Type),
-        /// allocated
-        attrs: []const Attribute,
+        attrs: ?Range(Attribute),
     };
 };
 

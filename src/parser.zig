@@ -68,9 +68,271 @@ const Parser = struct {
         _ = try self.expectToken(.semicolon);
     }
 
+    pub fn attributeList(self: *Parser) ![]const Ast.Attribute {
+        const max_attrs = std.meta.fields(Ast.Attribute).len;
+
+        var attrs = try std.ArrayList(Ast.Attribute).initCapacity(self.allocator, max_attrs);
+        errdefer attrs.deinit();
+
+        while (true) {
+            if (attrs.items.len >= max_attrs) {
+                self.addError(
+                    self.current_token.loc,
+                    "exceeded maximum attributes per declaration ({})",
+                    .{max_attrs},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+
+            const attr = try self.attribute() orelse break;
+            attrs.appendAssumeCapacity(attr);
+        }
+
+        return attrs.toOwnedSlice();
+    }
+
+    /// Attribute :
+    /// ATTR 'invariant'
+    /// ATTR 'const'
+    /// ATTR 'vertex'
+    /// ATTR 'fragment'
+    /// ATTR 'compute'
+    /// ATTR 'align'          PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'binding'        PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'group'          PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'id'             PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'location'       PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'size'           PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
+    /// ATTR 'workgroup_size' PAREN_LEFT Expr              (COMMA Expr)?  (COMMA Expr)? COMMA? PAREN_RIGHT
+    /// ATTR 'builtin'        PAREN_LEFT BuiltinValue                                   COMMA? PAREN_RIGHT
+    /// ATTR 'interpolate'    PAREN_LEFT InterpolationType (COMMA InterpolationSample)? COMMA? PAREN_RIGHT
+    pub fn attribute(self: *Parser) !?Ast.Attribute {
+        if (self.eatToken(.attr) == null) return null;
+        const ident_tok = try self.expectToken(.ident);
+        const str = ident_tok.loc.asStr(self.source);
+        const attr = std.meta.stringToEnum(std.meta.Tag(Ast.Attribute), str) orelse {
+            self.addError(
+                ident_tok.loc,
+                "invalid attribute name",
+                .{},
+                &.{
+                    \\possible attributes are 
+                    \\  'invariant', 'const', 'vertex', 'fragment', 'compute',
+                    \\  'align', 'binding', 'group', 'id', 'location', 'size',
+                    \\  'workgroup_size', 'builtin' and 'interpolate'
+                },
+            );
+            return error.Parsing;
+        };
+        switch (attr) {
+            .invariant => return .invariant,
+            .@"const" => return .@"const",
+            .vertex => return .vertex,
+            .fragment => return .fragment,
+            .compute => return .compute,
+            .@"align" => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected align expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .@"align" = expr };
+            },
+            .binding => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected binding expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .binding = expr };
+            },
+            .group => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected group expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .group = expr };
+            },
+            .id => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected id expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .id = expr };
+            },
+            .location => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected location expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .location = expr };
+            },
+            .size => {
+                _ = try self.expectToken(.paren_left);
+                const expr = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected size expression", .{}, &.{});
+                    return error.Parsing;
+                };
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .size = expr };
+            },
+            .workgroup_size => {
+                _ = try self.expectToken(.paren_left);
+
+                const expr_1 = try self.expression() orelse {
+                    self.addError(self.current_token.loc, "expected workgroup_size x parameter", .{}, &.{});
+                    return error.Parsing;
+                };
+
+                if (self.eatToken(.comma)) |_| {
+                    if (self.current_token.tag != .paren_right) {
+                        const expr_2 = try self.expression() orelse {
+                            self.addError(self.current_token.loc, "expected workgroup_size y parameter", .{}, &.{});
+                            return error.Parsing;
+                        };
+
+                        if (self.eatToken(.comma)) |_| {
+                            if (self.current_token.tag != .paren_right) {
+                                const expr_3 = try self.expression() orelse {
+                                    self.addError(self.current_token.loc, "expected workgroup_size z parameter", .{}, &.{});
+                                    return error.Parsing;
+                                };
+
+                                _ = self.eatToken(.comma);
+                                _ = try self.expectToken(.paren_right);
+                                return .{ .workgroup_size = .{ expr_1, expr_2, expr_3 } };
+                            }
+                        }
+
+                        _ = try self.expectToken(.paren_right);
+                        return .{ .workgroup_size = .{ expr_1, expr_2, null } };
+                    }
+                }
+
+                _ = try self.expectToken(.paren_right);
+                return .{ .workgroup_size = .{ expr_1, null, null } };
+            },
+            .builtin => {
+                _ = try self.expectToken(.paren_left);
+                const value = try self.expectBuiltinValue();
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+                return .{ .builtin = value };
+            },
+            .interpolate => {
+                _ = try self.expectToken(.paren_left);
+                const inter_type = try self.expectInterpolationType();
+
+                if (self.eatToken(.comma)) |_| {
+                    if (self.current_token.tag != .paren_right) {
+                        const inter_sample = try self.expectInterpolationSample();
+
+                        _ = self.eatToken(.comma);
+                        _ = try self.expectToken(.paren_right);
+                        return .{ .interpolate = .{ .type = inter_type, .sample = inter_sample } };
+                    }
+                }
+
+                _ = try self.expectToken(.paren_right);
+                return .{ .interpolate = .{ .type = inter_type, .sample = null } };
+            },
+        }
+    }
+
+    /// BuiltinValue
+    ///   : 'vertex_index'
+    ///   | 'instance_index'
+    ///   | 'position'
+    ///   | 'front_facing'
+    ///   | 'frag_depth'
+    ///   | 'local_invocation_id'
+    ///   | 'local_invocation_index'
+    ///   | 'global_invocation_id'
+    ///   | 'workgroup_id'
+    ///   | 'num_workgroups'
+    ///   | 'sample_index'
+    ///   | 'sample_mask'
+    pub fn expectBuiltinValue(self: *Parser) !Ast.Attribute.Builtin {
+        if (self.current_token.tag == .ident) {
+            const str = self.current_token.loc.asStr(self.source);
+            if (std.meta.stringToEnum(Ast.Attribute.Builtin, str)) |res| {
+                _ = self.next();
+                return res;
+            }
+        }
+
+        self.addError(
+            self.current_token.loc,
+            "expected builtin value name, found '{s}'",
+            .{self.current_token.tag.symbol()},
+            &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"},
+        );
+        return error.Parsing;
+    }
+
+    /// InterpolationType
+    ///   : 'perspective'
+    ///   | 'linear'
+    ///   | 'flat'
+    pub fn expectInterpolationType(self: *Parser) !Ast.Attribute.InterpolationType {
+        if (self.current_token.tag == .ident) {
+            const str = self.current_token.loc.asStr(self.source);
+            if (std.meta.stringToEnum(Ast.Attribute.InterpolationType, str)) |res| {
+                _ = self.next();
+                return res;
+            }
+        }
+
+        self.addError(
+            self.current_token.loc,
+            "expected interpolation type name, found '{s}'",
+            .{self.current_token.tag.symbol()},
+            &.{"possible values are 'perspective', 'linear' and 'flat'"},
+        );
+        return error.Parsing;
+    }
+
+    /// InterpolationSample
+    ///   : 'center'
+    ///   | 'centroid'
+    ///   | 'sample'
+    pub fn expectInterpolationSample(self: *Parser) !Ast.Attribute.InterpolationSample {
+        if (self.current_token.tag == .ident) {
+            const str = self.current_token.loc.asStr(self.source);
+            if (std.meta.stringToEnum(Ast.Attribute.InterpolationSample, str)) |res| {
+                _ = self.next();
+                return res;
+            }
+        }
+
+        self.addError(
+            self.current_token.loc,
+            "expected interpolation sample name, found '{s}'",
+            .{self.current_token.tag.symbol()},
+            &.{"possible values are 'center', 'centroid' and 'sample'"},
+        );
+        return error.Parsing;
+    }
+
     /// GlobalVarDecl
-    ///  : VariableAttributeList* VariableDecl (EQUAL Expr)? TODO
+    ///  : Attribute* VariableDecl (EQUAL Expr)?
     pub fn globalVarDecl(self: *Parser) !?Ast.Variable {
+        const attrs = try self.attributeList();
         const decl = try self.variableDecl() orelse return null;
         const initializer = if (self.eatToken(.equal)) |_|
             try self.expression() orelse {
@@ -91,11 +353,11 @@ const Parser = struct {
             .addr_space = if (decl.qualifier) |q| q.addr_space else null,
             .access = if (decl.qualifier) |q| q.access else null,
             .type = decl.type,
+            .attrs = attrs,
         };
     }
 
-    // VariableDecl
-    //   : VAR VariableQualifier? OptionalyTypedIdent
+    // VariableDecl : VAR VariableQualifier? OptionalyTypedIdent
     pub fn variableDecl(self: *Parser) !?Ast.Variable.DeclInfo {
         if (self.eatToken(.keyword_var) == null) return null;
         const qualifier = try self.variableQualifier();
@@ -107,8 +369,7 @@ const Parser = struct {
         };
     }
 
-    /// VariableQualifier
-    ///   : LESS_THAN AddressSpace (COMMA AccessMode)? GREATER_THAN
+    /// VariableQualifier : LESS_THAN AddressSpace (COMMA AccessMode)? GREATER_THAN
     pub fn variableQualifier(self: *Parser) !?Ast.Variable.Qualifier {
         if (self.eatToken(.less_than) == null) return null;
         const addr_space = try self.expectAddressSpace();
@@ -120,8 +381,7 @@ const Parser = struct {
         return .{ .addr_space = addr_space, .access = access };
     }
 
-    // OptionalyTypedIdent
-    //   : IDENT ( COLON TypeSpecifier ) ?
+    // OptionalyTypedIdent : IDENT ( COLON TypeSpecifier ) ?
     pub fn expectOptionalyTypedIdent(self: *Parser) !Ast.OptionalyTypedIdent {
         const name = try self.expectToken(.ident);
         const ident_type = if (self.eatToken(.colon)) |_|
@@ -370,21 +630,9 @@ const Parser = struct {
     pub fn expectAddressSpace(self: *Parser) !Ast.AddressSpace {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
-            if (std.mem.eql(u8, "function", str)) {
+            if (std.meta.stringToEnum(Ast.AddressSpace, str)) |res| {
                 _ = self.next();
-                return .function;
-            } else if (std.mem.eql(u8, "private", str)) {
-                _ = self.next();
-                return .private;
-            } else if (std.mem.eql(u8, "workgroup", str)) {
-                _ = self.next();
-                return .workgroup;
-            } else if (std.mem.eql(u8, "uniform", str)) {
-                _ = self.next();
-                return .uniform;
-            } else if (std.mem.eql(u8, "storage", str)) {
-                _ = self.next();
-                return .storage;
+                return res;
             }
         }
 
@@ -401,15 +649,9 @@ const Parser = struct {
     pub fn expectAccessMode(self: *Parser) !Ast.AccessMode {
         if (self.current_token.tag == .ident) {
             const str = self.current_token.loc.asStr(self.source);
-            if (std.mem.eql(u8, "read", str)) {
+            if (std.meta.stringToEnum(Ast.AccessMode, str)) |res| {
                 _ = self.next();
-                return .read;
-            } else if (std.mem.eql(u8, "write", str)) {
-                _ = self.next();
-                return .write;
-            } else if (std.mem.eql(u8, "read_write", str)) {
-                _ = self.next();
-                return .read_write;
+                return res;
             }
         }
 
@@ -570,7 +812,7 @@ const Parser = struct {
     ///   | AND   UnaryExpr
     pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index(Ast.Expression) {
         const op_token = self.current_token;
-        const op: Ast.UnaryExpr.Operation = switch (op_token.tag) {
+        const op: Ast.UnaryExpr.Operator = switch (op_token.tag) {
             .bang, .tilde => .not,
             .minus => .negate,
             .star => .deref,
@@ -605,7 +847,7 @@ const Parser = struct {
         var left = left_unary;
         while (true) {
             const op_token = self.current_token;
-            const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
                 .star => .multiply,
                 .division => .divide,
                 .mod => .modulo,
@@ -640,7 +882,7 @@ const Parser = struct {
         var left = left_mul;
         while (true) {
             const op_token = self.current_token;
-            const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+            const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
                 .plus => .add,
                 .minus => .subtract,
                 else => return left,
@@ -674,7 +916,7 @@ const Parser = struct {
     /// expects first expression ( UnaryExpr )
     pub fn expectShiftExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
             .shift_left => .shift_left,
             .shift_right => .shift_right,
             else => return try self.expectMathExpr(left),
@@ -707,7 +949,7 @@ const Parser = struct {
     pub fn expectRelationalExpr(self: *Parser, left_unary: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         const left = try self.expectShiftExpr(left_unary);
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
             .equal_equal => .equal,
             .not_equal => .not_equal,
             .less_than => .less,
@@ -739,7 +981,7 @@ const Parser = struct {
     /// expects first expression ( UnaryExpr )
     pub fn bitwiseExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
             .@"and" => .binary_and,
             .@"or" => .binary_or,
             .xor => .binary_xor,
@@ -771,11 +1013,11 @@ const Parser = struct {
     ///   | RelationalExpr (OR_OR   RelationalExpr)*
     ///
     /// expects first expression ( UnaryExpr )
-    pub fn shortCircuitExpr(self: *Parser, left_relational: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+    pub fn expectShortCircuitExpr(self: *Parser, left_relational: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
         var left = left_relational;
 
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operation = switch (op_token.tag) {
+        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
             .and_and => .circuit_and,
             .or_or => .circuit_or,
             else => return left,
@@ -810,7 +1052,7 @@ const Parser = struct {
         const left_unary = try self.unaryExpr() orelse return null;
         if (try self.bitwiseExpr(left_unary)) |bitwise| return bitwise;
         const left = try self.expectRelationalExpr(left_unary);
-        return try self.shortCircuitExpr(left);
+        return try self.expectShortCircuitExpr(left);
     }
 
     pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {
@@ -935,7 +1177,7 @@ test Parser {
 
 test "no errors" {
     const source =
-        \\var expr = vec3<f32>(vec2(1, 5), 3);
+        \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
         \\var expr = bitcast<f32>(5);
         \\var expr = ~(-(!false));
         \\var expr = expr;

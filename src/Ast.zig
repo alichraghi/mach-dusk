@@ -14,6 +14,14 @@ extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 types: std.ArrayListUnmanaged(Type) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
+    for (self.globals.items) |global| {
+        switch (global) {
+            .variable => |variable| {
+                allocator.free(variable.attrs);
+            },
+            else => {},
+        }
+    }
     self.globals.deinit(allocator);
     self.expressions.deinit(allocator);
     self.extra.deinit(allocator);
@@ -50,8 +58,59 @@ pub fn Index(comptime _: type) type {
 pub const GlobalDecl = union(enum) {
     variable: Variable,
     function: Function,
-    strct: Struct,
+    @"struct": Struct,
     type_alias: TypeAlias,
+};
+
+pub const Attribute = union(enum) {
+    @"const",
+    invariant,
+    vertex,
+    fragment,
+    compute,
+    @"align": Index(Expression),
+    binding: Index(Expression),
+    group: Index(Expression),
+    id: Index(Expression),
+    location: Index(Expression),
+    size: Index(Expression),
+    builtin: Builtin,
+    interpolate: struct {
+        type: InterpolationType,
+        sample: ?InterpolationSample,
+    },
+    workgroup_size: struct {
+        Index(Expression),
+        ?Index(Expression),
+        ?Index(Expression),
+    },
+
+    pub const Builtin = enum {
+        vertex_index,
+        instance_index,
+        position,
+        front_facing,
+        frag_depth,
+        local_invocation_id,
+        local_invocation_index,
+        global_invocation_id,
+        workgroup_id,
+        num_workgroups,
+        sample_index,
+        sample_mask,
+    };
+
+    pub const InterpolationType = enum {
+        perspective,
+        linear,
+        flat,
+    };
+
+    pub const InterpolationSample = enum {
+        center,
+        centroid,
+        sample,
+    };
 };
 
 pub const Variable = struct {
@@ -61,6 +120,8 @@ pub const Variable = struct {
     access: ?AccessMode,
     type: ?Index(Type),
     value: ?Index(Expression),
+    /// allocated
+    attrs: []const Attribute,
 
     pub const Qualifier = struct {
         addr_space: AddressSpace,
@@ -163,19 +224,19 @@ pub const BitcastExpr = struct {
 };
 
 pub const UnaryExpr = struct {
-    pub const Operation = enum {
+    pub const Operator = enum {
         negate,
         not,
         deref,
         addr_of,
     };
 
-    op: Operation,
+    op: Operator,
     expr: Index(Expression),
 };
 
 pub const BinaryExpr = struct {
-    pub const Operation = enum {
+    pub const Operator = enum {
         /// +
         add,
         /// -
@@ -214,7 +275,7 @@ pub const BinaryExpr = struct {
         shift_right,
     };
 
-    op: Operation,
+    op: Operator,
     left: Index(Expression),
     right: Index(Expression),
 };

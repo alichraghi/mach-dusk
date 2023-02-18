@@ -15,6 +15,8 @@ extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 types: std.ArrayListUnmanaged(Type) = .{},
 /// Contains declarations attributes
 attrs: std.ArrayListUnmanaged(Attribute) = .{},
+/// Contains statements
+statements: std.ArrayListUnmanaged(Statement) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     for (self.globals.items) |global| {
@@ -29,6 +31,7 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.extra.deinit(allocator);
     self.types.deinit(allocator);
     self.attrs.deinit(allocator);
+    self.statements.deinit(allocator);
 }
 
 pub fn getGlobal(self: Ast, i: Index(GlobalDecl)) GlobalDecl {
@@ -157,7 +160,7 @@ pub const Function = struct {
     params: []const Param,
     attrs: ?Range(Attribute),
     result: ?Result,
-    // block: Block,
+    body: Block,
 
     pub const Param = struct {
         name: []const u8,
@@ -171,9 +174,15 @@ pub const Function = struct {
     };
 };
 
-pub const Block = []const Statement;
+/// allocated
+pub const Block = Ast.Range(Statement);
 
-pub const Statement = union(enum) {};
+pub const Statement = union(enum) {
+    @"return": ?Index(Expression),
+    continuing_statement: Block,
+    /// only in continuing_statement statement
+    break_if_statement: Index(Expression),
+};
 
 pub const Struct = struct {
     name: []const u8,

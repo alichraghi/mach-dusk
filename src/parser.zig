@@ -494,6 +494,7 @@ const Parser = struct {
 
         _ = try self.expectToken(.paren_left);
         const params = try self.expectParameterList();
+        errdefer self.allocator.free(params);
         _ = try self.expectToken(.paren_right);
 
         const result = if (self.eatToken(.arrow)) |_|
@@ -501,11 +502,22 @@ const Parser = struct {
         else
             null;
 
+        // const body = try self.block() orelse {
+        //     self.addError(
+        //         self.current_token.loc,
+        //         "expected function body, found '{s}'",
+        //         .{self.current_token.tag.symbol()},
+        //         &.{},
+        //     );
+        //     return error.Parsing;
+        // };
+
         return .{
             .name = name.loc.asStr(self.source),
             .params = params,
             .attrs = attrs,
             .result = result,
+            .body = undefined,
         };
     }
 
@@ -514,6 +526,71 @@ const Parser = struct {
         const attrs = try self.attributeList();
         const return_type = try self.expectTypeSpecifier();
         return .{ .attrs = attrs, .type = return_type };
+    }
+
+    /// Block : BRACE_LEFT Statement* BRACE_RIGHT
+    // pub fn block(self: *Parser) !?Ast.Block {
+    //     _ = self.eatToken(.brace_left) orelse return null;
+
+    //     var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
+    //     errdefer stmnts.deinit();
+    //     while (try self.statement()) |stmnt| {
+    //         try stmnts.append(stmnt);
+    //     }
+
+    //     _ = try self.expectToken(.brace_right);
+    //     return try self.addStmntSlice(try stmnts.toOwnedSlice());
+    // }
+
+    /// Statement
+    ///   : SEMICOLON
+    ///   | ReturnStatement           SEMICOLON
+    ///   | IfStatement
+    ///   | SwitchStatement
+    ///   | LoopStatement
+    ///   | ForStatement
+    ///   | WhileStatement
+    ///   | FuncCallStatement         SEMICOLON
+    ///   | VariableStatement         SEMICOLON
+    ///   | BreakStatement            SEMICOLON
+    ///   | ContinueStatement         SEMICOLON
+    ///   | DISCARD SEMICOLON
+    ///   | VariableUpdatingStatement SEMICOLON
+    ///   | CompoundStatement
+    ///   | ConstAssertStatement      SEMICOLON
+    pub fn statement(self: *Parser) !?Ast.Index(Ast.Statement) {
+        while (self.eatToken(.semicolon)) |_| {}
+
+        if (try self.returnStatement()) |ret| {
+            _ = try self.expectToken(.semicolon);
+            return try self.addStmnt(.{ .@"return" = ret });
+        }
+
+        return null;
+    }
+
+    pub fn returnStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
+        if (self.eatToken(.keyword_return) == null) return null;
+        return self.expression();
+    }
+
+    // pub fn continuingStatement(self: *Parser) !?Ast.Statement {
+    //     if (self.eatToken(.keyword_continuing) == null) return null;
+    //     _ = try self.expectToken(.brace_left);
+
+    //     var stmnts = std.ArrayList(Ast.Index(Ast.Statement)).init(self.allocator);
+    //     errdefer stmnts.deinit();
+    //     while (try self.statement() orelse try self.breakIfStatement()) |stmnt| {
+    //         try stmnts.append(stmnt);
+    //     }
+
+    //     _ = try self.expectToken(.brace_right);
+    //     return try self.addStmntSlice(try stmnts.toOwnedSlice());
+    // }
+
+    pub fn breakIfStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
+        if (self.eatToken(.keyword_return) == null) return null;
+        return self.expression();
     }
 
     /// ParameterList : Parameter (COMMA Param)* COMMA?
@@ -1285,23 +1362,29 @@ const Parser = struct {
         }
     }
 
-    pub fn addExpr(self: *Parser, expr: Ast.Expression) std.mem.Allocator.Error!Ast.Index(Ast.Expression) {
+    pub fn addExpr(self: *Parser, expr: Ast.Expression) error{OutOfMemory}!Ast.Index(Ast.Expression) {
         const i = @intCast(u32, self.ast.expressions.items.len);
         try self.ast.expressions.append(self.allocator, expr);
         return i;
     }
 
-    pub fn addGlobal(self: *Parser, decl: Ast.GlobalDecl) std.mem.Allocator.Error!void {
+    pub fn addStmnt(self: *Parser, expr: Ast.Statement) error{OutOfMemory}!Ast.Index(Ast.Statement) {
+        const i = @intCast(u32, self.ast.statements.items.len);
+        try self.ast.statements.append(self.allocator, expr);
+        return i;
+    }
+
+    pub fn addGlobal(self: *Parser, decl: Ast.GlobalDecl) error{OutOfMemory}!void {
         return self.ast.globals.append(self.allocator, decl);
     }
 
-    pub fn addType(self: *Parser, t: Ast.Type) std.mem.Allocator.Error!Ast.Index(Ast.Type) {
+    pub fn addType(self: *Parser, t: Ast.Type) error{OutOfMemory}!Ast.Index(Ast.Type) {
         const i = @intCast(u32, self.ast.types.items.len);
         try self.ast.types.append(self.allocator, t);
         return i;
     }
 
-    pub fn addExprExtraSlice(self: *Parser, slice: []const Ast.Index(Ast.Expression)) std.mem.Allocator.Error!Ast.Range(Ast.Index(Ast.Expression)) {
+    pub fn addExprExtraSlice(self: *Parser, slice: []const Ast.Index(Ast.Expression)) error{OutOfMemory}!Ast.Range(Ast.Index(Ast.Expression)) {
         try self.ast.extra.appendSlice(self.allocator, slice);
         return .{
             .start = @intCast(u32, self.ast.extra.items.len - slice.len),
@@ -1309,11 +1392,19 @@ const Parser = struct {
         };
     }
 
-    pub fn addAttrSlice(self: *Parser, slice: []const Ast.Attribute) std.mem.Allocator.Error!Ast.Range(Ast.Attribute) {
+    pub fn addAttrSlice(self: *Parser, slice: []const Ast.Attribute) error{OutOfMemory}!Ast.Range(Ast.Attribute) {
         try self.ast.attrs.appendSlice(self.allocator, slice);
         return .{
             .start = @intCast(u32, self.ast.attrs.items.len - slice.len),
             .end = @intCast(u32, self.ast.attrs.items.len),
+        };
+    }
+
+    pub fn addStmntSlice(self: *Parser, slice: []const Ast.Statement) error{OutOfMemory}!Ast.Range(Ast.Statement) {
+        try self.ast.statements.appendSlice(self.allocator, slice);
+        return .{
+            .start = @intCast(u32, self.ast.statements.items.len - slice.len),
+            .end = @intCast(u32, self.ast.statements.items.len),
         };
     }
 
@@ -1409,7 +1500,10 @@ test "no errors" {
         \\  s: u32,
         \\}
         \\const_assert 2 > 1;
-        \\fn urmom(f: u32) -> u32
+        \\fn foo(f: u32) -> u32 //{}
+        \\fn foo(f: u32) -> u32 //{
+        \\//  return bar;
+        \\//}
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

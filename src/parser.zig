@@ -502,22 +502,22 @@ const Parser = struct {
         else
             null;
 
-        // const body = try self.block() orelse {
-        //     self.addError(
-        //         self.current_token.loc,
-        //         "expected function body, found '{s}'",
-        //         .{self.current_token.tag.symbol()},
-        //         &.{},
-        //     );
-        //     return error.Parsing;
-        // };
+        const body = try self.block() orelse {
+            self.addError(
+                self.current_token.loc,
+                "expected function body, found '{s}'",
+                .{self.current_token.tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
 
         return .{
             .name = name.loc.asStr(self.source),
             .params = params,
             .attrs = attrs,
             .result = result,
-            .body = undefined,
+            .body = body,
         };
     }
 
@@ -529,18 +529,12 @@ const Parser = struct {
     }
 
     /// Block : BRACE_LEFT Statement* BRACE_RIGHT
-    // pub fn block(self: *Parser) !?Ast.Block {
-    //     _ = self.eatToken(.brace_left) orelse return null;
-
-    //     var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
-    //     errdefer stmnts.deinit();
-    //     while (try self.statement()) |stmnt| {
-    //         try stmnts.append(stmnt);
-    //     }
-
-    //     _ = try self.expectToken(.brace_right);
-    //     return try self.addStmntSlice(try stmnts.toOwnedSlice());
-    // }
+    pub fn block(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Block {
+        _ = self.eatToken(.brace_left) orelse return null;
+        const stmnt_list = try self.statementList() orelse return null;
+        _ = try self.expectToken(.brace_right);
+        return stmnt_list;
+    }
 
     /// Statement
     ///   : SEMICOLON
@@ -558,12 +552,16 @@ const Parser = struct {
     ///   | VariableUpdatingStatement SEMICOLON
     ///   | CompoundStatement
     ///   | ConstAssertStatement      SEMICOLON
-    pub fn statement(self: *Parser) !?Ast.Index(Ast.Statement) {
+    pub fn statement(self: *Parser) !?Ast.Statement {
         while (self.eatToken(.semicolon)) |_| {}
 
         if (try self.returnStatement()) |ret| {
             _ = try self.expectToken(.semicolon);
-            return try self.addStmnt(.{ .@"return" = ret });
+            return .{ .@"return" = ret };
+        } else if (try self.loopStatement()) |loop| {
+            return .{ .loop = loop };
+        } else if (try self.continuingStatement()) |ct| {
+            return .{ .continuing = ct };
         }
 
         return null;
@@ -574,23 +572,29 @@ const Parser = struct {
         return self.expression();
     }
 
-    // pub fn continuingStatement(self: *Parser) !?Ast.Statement {
-    //     if (self.eatToken(.keyword_continuing) == null) return null;
-    //     _ = try self.expectToken(.brace_left);
+    pub fn loopStatement(self: *Parser) !?Ast.Block {
+        if (self.eatToken(.keyword_loop) == null) return null;
+        return self.block();
+    }
 
-    //     var stmnts = std.ArrayList(Ast.Index(Ast.Statement)).init(self.allocator);
-    //     errdefer stmnts.deinit();
-    //     while (try self.statement() orelse try self.breakIfStatement()) |stmnt| {
-    //         try stmnts.append(stmnt);
-    //     }
-
-    //     _ = try self.expectToken(.brace_right);
-    //     return try self.addStmntSlice(try stmnts.toOwnedSlice());
-    // }
+    pub fn continuingStatement(self: *Parser) !?Ast.Block {
+        if (self.eatToken(.keyword_continuing) == null) return null;
+        return self.block();
+    }
 
     pub fn breakIfStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
         if (self.eatToken(.keyword_return) == null) return null;
         return self.expression();
+    }
+
+    /// StatementList : Statement*
+    pub fn statementList(self: *Parser) !?Ast.Block {
+        var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
+        defer stmnts.deinit();
+        while (try self.statement()) |stmnt| {
+            try stmnts.append(stmnt);
+        }
+        return try self.addStmntSlice(stmnts.items);
     }
 
     /// ParameterList : Parameter (COMMA Param)* COMMA?
@@ -1385,10 +1389,10 @@ const Parser = struct {
     }
 
     pub fn addExprExtraSlice(self: *Parser, slice: []const Ast.Index(Ast.Expression)) error{OutOfMemory}!Ast.Range(Ast.Index(Ast.Expression)) {
-        try self.ast.extra.appendSlice(self.allocator, slice);
+        try self.ast.expressions_extra.appendSlice(self.allocator, slice);
         return .{
-            .start = @intCast(u32, self.ast.extra.items.len - slice.len),
-            .end = @intCast(u32, self.ast.extra.items.len),
+            .start = @intCast(u32, self.ast.expressions_extra.items.len - slice.len),
+            .end = @intCast(u32, self.ast.expressions_extra.items.len),
         };
     }
 
@@ -1481,7 +1485,7 @@ test Parser {
 test "no errors" {
     const source =
         \\;
-        \\@interpolate(flat) var expr = vec3<f32>(vec2(1, 5), 3);
+        \\@interpolate(flat) var expr = vec3<f32>(vec2(vec2(vec2(1, 5 / 5 + 2, 4 - 3 / 4), 5 / 4 + 1), 5), 3);
         \\var<storage> expr = bitcast<f32>(5);
         \\var expr;
         \\var expr = bool();
@@ -1500,10 +1504,12 @@ test "no errors" {
         \\  s: u32,
         \\}
         \\const_assert 2 > 1;
-        \\fn foo(f: u32) -> u32 //{}
-        \\fn foo(f: u32) -> u32 //{
-        \\//  return bar;
-        \\//}
+        \\fn foo(f: u32) -> u32 {}
+        \\fn foo(f: u32) -> u32 {
+        \\  loop {
+        \\    return bar;
+        \\  }
+        \\}
     ;
 
     var ast = try parse(std.testing.allocator, source, null);

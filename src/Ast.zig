@@ -10,7 +10,7 @@ globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
 expressions: std.ArrayListUnmanaged(Expression) = .{},
 /// Contains index of expression's extra info,
 /// like function call arguments expressions
-extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
+expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
 /// Contains Type's that an ArrayType `element_type` field need
 types: std.ArrayListUnmanaged(Type) = .{},
 /// Contains declarations attributes
@@ -28,7 +28,7 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     }
     self.globals.deinit(allocator);
     self.expressions.deinit(allocator);
-    self.extra.deinit(allocator);
+    self.expressions_extra.deinit(allocator);
     self.types.deinit(allocator);
     self.attrs.deinit(allocator);
     self.statements.deinit(allocator);
@@ -179,9 +179,10 @@ pub const Block = Ast.Range(Statement);
 
 pub const Statement = union(enum) {
     @"return": ?Index(Expression),
-    continuing_statement: Block,
-    /// only in continuing_statement statement
-    break_if_statement: Index(Expression),
+    loop: Block,
+    continuing: Block,
+    /// only in continuing statement
+    break_if: Index(Expression),
 };
 
 pub const Struct = struct {

@@ -1,1 +1,7 @@
-nothing
+NOTE: right now we have `expressions_extra`.
+      which is `Range(Index(Expression))`, while it could be removed if 
+      expression return an `Expression` instead `Index(Expression)`
+      but there's compiler bug with unions and wasn't able to reproduce it
+      with an small example.
+
+      NOTE: another workaround is always using ReleaseFast or ReleaseSmall

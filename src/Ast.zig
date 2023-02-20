@@ -3,20 +3,18 @@ const Token = @import("Token.zig");
 
 const Ast = @This();
 
-/// TODO: make these MultiArrayList
+// TODO: make these MultiArrayList
+
 /// Entry of the parse result
 globals: std.ArrayListUnmanaged(GlobalDecl) = .{},
-/// Contains expression's that a GlobalDecl in `globals` may need
 expressions: std.ArrayListUnmanaged(Expression) = .{},
-/// Contains index of expression's extra info,
+/// Contains index of expression's extra info.
 /// like function call arguments expressions
 expressions_extra: std.ArrayListUnmanaged(Index(Expression)) = .{},
-/// Contains Type's that an ArrayType `element_type` field need
-types: std.ArrayListUnmanaged(Type) = .{},
-/// Contains declarations attributes
-attrs: std.ArrayListUnmanaged(Attribute) = .{},
-/// Contains statements
 statements: std.ArrayListUnmanaged(Statement) = .{},
+types: std.ArrayListUnmanaged(Type) = .{},
+attrs: std.ArrayListUnmanaged(Attribute) = .{},
+if_clauses: std.ArrayListUnmanaged(Statement.If.Clause) = .{},
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     for (self.globals.items) |global| {
@@ -32,6 +30,7 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.types.deinit(allocator);
     self.attrs.deinit(allocator);
     self.statements.deinit(allocator);
+    self.if_clauses.deinit(allocator);
 }
 
 pub fn getGlobal(self: Ast, i: Index(GlobalDecl)) GlobalDecl {
@@ -174,15 +173,33 @@ pub const Function = struct {
     };
 };
 
-/// allocated
-pub const Block = Ast.Range(Statement);
+pub const Block = Range(Statement);
 
 pub const Statement = union(enum) {
-    @"return": ?Index(Expression),
+    @"return": Return,
     loop: Block,
     continuing: Block,
     /// only in continuing statement
     break_if: Index(Expression),
+    @"break",
+    @"continue",
+    discard,
+    const_assert: Index(Expression),
+
+    pub const Return = union(enum) {
+        void,
+        expr: Index(Expression),
+    };
+
+    pub const If = struct {
+        if_list: Range(Clause),
+        @"else": ?Block,
+
+        pub const Clause = struct {
+            cond: Index(Expression),
+            payload: Block,
+        };
+    };
 };
 
 pub const Struct = struct {
@@ -266,7 +283,7 @@ pub const CallExpr = struct {
     };
 
     callable: Callable,
-    args: Range(Ast.Index(Expression)),
+    args: Range(Index(Expression)),
 };
 
 pub const BitcastExpr = struct {

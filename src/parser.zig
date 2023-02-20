@@ -539,53 +539,127 @@ const Parser = struct {
     /// Statement
     ///   : SEMICOLON
     ///   | ReturnStatement           SEMICOLON
-    ///   | IfStatement
-    ///   | SwitchStatement
+    ///   | IfStatement                            TODO
+    ///   | SwitchStatement                        TODO
     ///   | LoopStatement
-    ///   | ForStatement
-    ///   | WhileStatement
-    ///   | FuncCallStatement         SEMICOLON
-    ///   | VariableStatement         SEMICOLON
+    ///   | ForStatement                           TODO
+    ///   | WhileStatement                         TODO
+    ///   | FuncCallStatement         SEMICOLON    TODO
+    ///   | VariableStatement         SEMICOLON    TODO
     ///   | BreakStatement            SEMICOLON
+    ///   | BreakIfStatement          SEMICOLON
+    ///   | ContinuingStatement
     ///   | ContinueStatement         SEMICOLON
-    ///   | DISCARD SEMICOLON
-    ///   | VariableUpdatingStatement SEMICOLON
-    ///   | CompoundStatement
+    ///   | DiscardStatement          SEMICOLON
+    ///   | VariableUpdatingStatement SEMICOLON    TODO
+    ///   | CompoundStatement                      TODO
     ///   | ConstAssertStatement      SEMICOLON
+    ///
+    /// for simplicity and better error messages,
+    /// we are putting all statements here
     pub fn statement(self: *Parser) !?Ast.Statement {
         while (self.eatToken(.semicolon)) |_| {}
 
-        if (try self.returnStatement()) |ret| {
+        if (try self.returnStatement()) |expr| {
             _ = try self.expectToken(.semicolon);
-            return .{ .@"return" = ret };
-        } else if (try self.loopStatement()) |loop| {
-            return .{ .loop = loop };
-        } else if (try self.continuingStatement()) |ct| {
-            return .{ .continuing = ct };
+            return .{ .@"return" = expr };
+        } else if (try self.loopStatement()) |blk| {
+            return .{ .loop = blk };
+        } else if (try self.continuingStatement()) |blk| {
+            return .{ .continuing = blk };
+        } else if (try self.breakIfStatement()) |expr| {
+            _ = try self.expectToken(.semicolon);
+            return .{ .break_if = expr };
+        } else if (try self.breakStatement()) |_| {
+            _ = try self.expectToken(.semicolon);
+            return .@"break";
+        } else if (try self.discardStatement()) |_| {
+            _ = try self.expectToken(.semicolon);
+            return .discard;
+        } else if (try self.continueStatement()) |_| {
+            _ = try self.expectToken(.semicolon);
+            return .@"continue";
+        } else if (try self.constAssert()) |expr| {
+            _ = try self.expectToken(.semicolon);
+            return .{ .const_assert = expr };
         }
 
         return null;
     }
 
-    pub fn returnStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
+    /// ReturnStatement : RETURN Expr?
+    pub fn returnStatement(self: *Parser) !?Ast.Statement.Return {
         if (self.eatToken(.keyword_return) == null) return null;
-        return self.expression();
+        return if (try self.expression()) |expr| .{ .expr = expr } else .void;
     }
 
+    /// DiscardStatement : DISCARD
+    pub fn discardStatement(self: *Parser) !?void {
+        if (self.eatToken(.keyword_discard) == null) return null;
+    }
+
+    /// LoopStatement : LOOP Block
     pub fn loopStatement(self: *Parser) !?Ast.Block {
         if (self.eatToken(.keyword_loop) == null) return null;
         return self.block();
     }
 
+    /// ContinuingStatement : continuing Block
     pub fn continuingStatement(self: *Parser) !?Ast.Block {
         if (self.eatToken(.keyword_continuing) == null) return null;
         return self.block();
     }
 
+    /// BreakIfStatement : BREAK IF Expr
     pub fn breakIfStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
-        if (self.eatToken(.keyword_return) == null) return null;
-        return self.expression();
+        if (self.current_token.tag == .keyword_break and self.peek().tag == .keyword_if) {
+            _ = self.next();
+            _ = self.next();
+            return self.expression();
+        }
+        return null;
     }
+
+    /// BreakStatement : BREAK
+    pub fn breakStatement(self: *Parser) !?void {
+        if (self.eatToken(.keyword_break) == null) return null;
+    }
+
+    /// ContinueStatement : CONTINUE
+    pub fn continueStatement(self: *Parser) !?void {
+        if (self.eatToken(.keyword_continue) == null) return null;
+    }
+
+    /// IfStatement : IF EXpr Block (ELSE IF Expr Block)* ELSE Block?
+    // pub fn ifStatement(self: *Parser) !?void {
+    //     if (self.eatToken(.keyword_if) == null) return null;
+
+    //     var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
+    //     defer stmnts.deinit();
+    //     while (true) {
+    //         const cond = self.expression() orelse {
+    //             self.addError(
+    //                 self.current_token.loc,
+    //                 "expected condition expression, found '{s}'",
+    //                 .{self.current_token.tag.symbol()},
+    //                 &.{},
+    //             );
+    //             return error.Parsing;
+    //         };
+    //         const payload = try self.block() orelse {
+    //             self.addError(
+    //                 self.current_token.loc,
+    //                 "expected payload block, found '{s}'",
+    //                 .{self.current_token.tag.symbol()},
+    //                 &.{},
+    //             );
+    //             return error.Parsing;
+    //         };
+    //         try stmnts.append(.{ .cond = cond, .payload = payload });
+
+    //         if (self.eatToken(.@"else")) |_| {}
+    //     }
+    // }
 
     /// StatementList : Statement*
     pub fn statementList(self: *Parser) !?Ast.Block {
@@ -976,8 +1050,8 @@ const Parser = struct {
                 _ = try self.expectToken(.less_than);
                 const dest_type = try self.expectTypeSpecifier();
                 _ = try self.expectToken(.greater_than);
-                const args = try self.expectParenExpr();
-                return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = args } });
+                const expr = try self.expectParenExpr();
+                return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = expr } });
             },
             .paren_left => return try self.expectParenExpr(),
             .ident => {
@@ -1483,9 +1557,10 @@ test Parser {
 }
 
 test "no errors" {
+    const t = std.time.microTimestamp() * std.time.ns_per_us;
     const source =
         \\;
-        \\@interpolate(flat) var expr = vec3<f32>(vec2(vec2(vec2(1, 5 / 5 + 2, 4 - 3 / 4), 5 / 4 + 1), 5), 3);
+        \\@interpolate(flat) var expr = vec3<f32>(1, 5);
         \\var<storage> expr = bitcast<f32>(5);
         \\var expr;
         \\var expr = bool();
@@ -1506,14 +1581,22 @@ test "no errors" {
         \\const_assert 2 > 1;
         \\fn foo(f: u32) -> u32 {}
         \\fn foo(f: u32) -> u32 {
-        \\  loop {
-        \\    return bar;
-        \\  }
+        \\    loop {
+        \\        continuing {
+        \\            continue;
+        \\            break;
+        \\            break if true;
+        \\        }
+        \\        return bar;
+        \\        return;
+        \\        const_assert 2 > 1;
+        \\    }
         \\}
-    ;
+    ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);
     defer ast.deinit(std.testing.allocator);
+    std.debug.print("\n{s}\n", .{std.fmt.fmtDurationSigned(std.time.microTimestamp() * std.time.ns_per_us - t)});
 }
 
 test "variable & expressions" {

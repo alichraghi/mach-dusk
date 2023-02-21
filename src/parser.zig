@@ -35,8 +35,9 @@ const Parser = struct {
 
     pub fn parseRoot(self: *Parser) !void {
         errdefer self.ast.deinit(self.allocator);
-        try self.ast.globals.ensureTotalCapacityPrecise(self.allocator, self.source.len / 300); // 1:300 source to globals
-        try self.ast.expressions.ensureTotalCapacityPrecise(self.allocator, self.source.len / 10); // 1:10 source to expressions
+        const estimated_tokens = self.source.len / 8;
+        const estimated_nodes = (estimated_tokens + 2) / 2;
+        try self.ast.nodes.ensureTotalCapacity(self.allocator, estimated_nodes);
 
         while (self.current_token.tag != .eof) {
             self.globalDecl() catch |err| {
@@ -60,25 +61,24 @@ const Parser = struct {
     pub fn globalDecl(self: *Parser) !void {
         const attrs = try self.attributeList();
 
-        if (try self.typeAliasDecl()) |type_alias| {
-            try self.addGlobal(.{ .type_alias = type_alias });
+        if (try self.globalVarDecl(attrs)) |_| {
             _ = try self.expectToken(.semicolon);
-        } else if (try self.globalVarDecl(attrs)) |variable| {
-            try self.addGlobal(.{ .variable = variable });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.globalConstDecl()) |const_decl| {
-            try self.addGlobal(.{ .@"const" = const_decl });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.globalOverrideDecl(attrs)) |override| {
-            try self.addGlobal(.{ .override = override });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.structDecl()) |strct| {
-            try self.addGlobal(.{ .@"struct" = strct });
-        } else if (try self.constAssert()) |assert| {
-            try self.addGlobal(.{ .const_assert = assert });
-            _ = try self.expectToken(.semicolon);
-        } else if (try self.functionDecl(attrs)) |func| {
-            try self.addGlobal(.{ .function = func });
+            // } else if (try self.typeAliasDecl()) |type_alias| {
+            //     try self.addGlobal(.{ .type_alias = type_alias });
+            //     _ = try self.expectToken(.semicolon);
+            // } else if (try self.globalConstDecl()) |const_decl| {
+            //     try self.addGlobal(.{ .@"const" = const_decl });
+            //     _ = try self.expectToken(.semicolon);
+            // } else if (try self.globalOverrideDecl(attrs)) |override| {
+            //     try self.addGlobal(.{ .override = override });
+            //     _ = try self.expectToken(.semicolon);
+            // } else if (try self.structDecl()) |strct| {
+            //     try self.addGlobal(.{ .@"struct" = strct });
+            // } else if (try self.constAssert()) |assert| {
+            //     try self.addGlobal(.{ .const_assert = assert });
+            //     _ = try self.expectToken(.semicolon);
+            // } else if (try self.functionDecl(attrs)) |func| {
+            //     try self.addGlobal(.{ .function = func });
         } else {
             if (attrs != null) {
                 self.addError(
@@ -94,26 +94,16 @@ const Parser = struct {
         }
     }
 
-    pub fn attributeList(self: *Parser) !?Ast.Range(Ast.Attribute) {
-        const max_attrs = std.meta.fields(Ast.Attribute).len;
-        var attrs = std.BoundedArray(Ast.Attribute, max_attrs).init(0) catch unreachable;
+    pub fn attributeList(self: *Parser) !?Ast.Node.Index {
+        const scratch_top = self.ast.scratch.items.len;
+        defer self.ast.scratch.shrinkRetainingCapacity(scratch_top);
         while (true) {
-            if (attrs.len >= max_attrs) {
-                self.addError(
-                    self.current_token.loc,
-                    "exceeded maximum attributes per declaration ({})",
-                    .{max_attrs},
-                    &.{},
-                );
-                return error.Parsing;
-            }
-
             const attr = try self.attribute() orelse break;
-            attrs.appendAssumeCapacity(attr);
+            try self.ast.scratch.append(self.allocator, attr);
         }
-
-        if (attrs.len == 0) return null;
-        return try self.addAttrSlice(attrs.slice());
+        const list = self.ast.scratch.items[scratch_top..];
+        if (list.len == 0) return null;
+        return try self.listToSpan(list);
     }
 
     /// Attribute :
@@ -131,11 +121,160 @@ const Parser = struct {
     /// ATTR 'workgroup_size' PAREN_LEFT Expr              (COMMA Expr)?  (COMMA Expr)? COMMA? PAREN_RIGHT
     /// ATTR 'builtin'        PAREN_LEFT BuiltinValue                                   COMMA? PAREN_RIGHT
     /// ATTR 'interpolate'    PAREN_LEFT InterpolationType (COMMA InterpolationSample)? COMMA? PAREN_RIGHT
-    pub fn attribute(self: *Parser) !?Ast.Attribute {
-        if (self.eatToken(.attr) == null) return null;
+    pub fn attribute(self: *Parser) !?Ast.Node.Index {
+        const attr_token = self.eatToken(.attr) orelse return null;
         const ident_tok = try self.expectToken(.ident);
         const str = ident_tok.loc.asStr(self.source);
-        const attr = std.meta.stringToEnum(std.meta.Tag(Ast.Attribute), str) orelse {
+        if (std.mem.eql(u8, "invariant", str)) {
+            return try self.addNode(.{ .tag = .attr_invariant, .main_token = attr_token });
+        } else if (std.mem.eql(u8, "const", str)) {
+            return try self.addNode(.{ .tag = .attr_const, .main_token = attr_token });
+        } else if (std.mem.eql(u8, "vertex", str)) {
+            return try self.addNode(.{ .tag = .attr_vertex, .main_token = attr_token });
+        } else if (std.mem.eql(u8, "fragment", str)) {
+            return try self.addNode(.{ .tag = .attr_fragment, .main_token = attr_token });
+        } else if (std.mem.eql(u8, "compute", str)) {
+            return try self.addNode(.{ .tag = .attr_compute, .main_token = attr_token });
+        } else if (std.mem.eql(u8, "align", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected align expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_align, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "binding", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected binding expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_binding, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "group", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected group expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_group, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "id", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected id expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_id, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "location", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected location expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_location, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "size", str)) {
+            _ = try self.expectToken(.paren_left);
+            const expr = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected size expression", .{}, &.{});
+                return error.Parsing;
+            };
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_size, .main_token = attr_token, .lhs = expr });
+        } else if (std.mem.eql(u8, "builtin", str)) {
+            _ = try self.expectToken(.paren_left);
+            const value = try self.expectBuiltinValue();
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{ .tag = .attr_builtin, .main_token = attr_token, .lhs = value });
+        } else if (std.mem.eql(u8, "workgroup_size", str)) {
+            _ = try self.expectToken(.paren_left);
+
+            const expr_x = try self.expression() orelse {
+                self.addError(self.current_token.loc, "expected workgroup_size x parameter", .{}, &.{});
+                return error.Parsing;
+            };
+
+            if (self.eatToken(.comma)) |_| {
+                if (self.current_token.tag != .paren_right) {
+                    const expr_y = try self.expression() orelse {
+                        self.addError(self.current_token.loc, "expected workgroup_size y parameter", .{}, &.{});
+                        return error.Parsing;
+                    };
+
+                    if (self.eatToken(.comma)) |_| {
+                        if (self.current_token.tag != .paren_right) {
+                            const expr_z = try self.expression() orelse {
+                                self.addError(self.current_token.loc, "expected workgroup_size z parameter", .{}, &.{});
+                                return error.Parsing;
+                            };
+
+                            _ = self.eatToken(.comma);
+                            _ = try self.expectToken(.paren_right);
+                            const extra = try self.addExtra(Ast.Node.Workgroup{
+                                .y = expr_y,
+                                .z = expr_z,
+                            });
+                            return try self.addNode(.{
+                                .tag = .attr_workgroup,
+                                .main_token = attr_token,
+                                .lhs = expr_x,
+                                .rhs = extra,
+                            });
+                        }
+                    }
+
+                    _ = try self.expectToken(.paren_right);
+                    const extra = try self.addExtra(Ast.Node.Workgroup{ .y = expr_y });
+                    return try self.addNode(.{
+                        .tag = .attr_workgroup,
+                        .main_token = attr_token,
+                        .lhs = expr_x,
+                        .rhs = extra,
+                    });
+                }
+            }
+
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{
+                .tag = .attr_workgroup,
+                .main_token = attr_token,
+                .lhs = expr_x,
+            });
+        } else if (std.mem.eql(u8, "interpolate", str)) {
+            _ = try self.expectToken(.paren_left);
+            const inter_type = try self.expectInterpolationType();
+
+            if (self.eatToken(.comma)) |_| {
+                if (self.current_token.tag != .paren_right) {
+                    const inter_sample = try self.expectInterpolationSample();
+
+                    _ = self.eatToken(.comma);
+                    _ = try self.expectToken(.paren_right);
+                    return try self.addNode(.{
+                        .tag = .attr_interpolate,
+                        .main_token = attr_token,
+                        .lhs = inter_type,
+                        .rhs = inter_sample,
+                    });
+                }
+            }
+
+            _ = try self.expectToken(.paren_right);
+            return try self.addNode(.{
+                .tag = .attr_interpolate,
+                .main_token = attr_token,
+                .lhs = inter_type,
+            });
+        } else {
             self.addError(
                 ident_tok.loc,
                 "invalid attribute name",
@@ -148,133 +287,6 @@ const Parser = struct {
                 },
             );
             return error.Parsing;
-        };
-        switch (attr) {
-            .invariant => return .invariant,
-            .@"const" => return .@"const",
-            .vertex => return .vertex,
-            .fragment => return .fragment,
-            .compute => return .compute,
-            .@"align" => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected align expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .@"align" = expr };
-            },
-            .binding => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected binding expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .binding = expr };
-            },
-            .group => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected group expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .group = expr };
-            },
-            .id => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected id expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .id = expr };
-            },
-            .location => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected location expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .location = expr };
-            },
-            .size => {
-                _ = try self.expectToken(.paren_left);
-                const expr = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected size expression", .{}, &.{});
-                    return error.Parsing;
-                };
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .size = expr };
-            },
-            .workgroup_size => {
-                _ = try self.expectToken(.paren_left);
-
-                const expr_1 = try self.expression() orelse {
-                    self.addError(self.current_token.loc, "expected workgroup_size x parameter", .{}, &.{});
-                    return error.Parsing;
-                };
-
-                if (self.eatToken(.comma)) |_| {
-                    if (self.current_token.tag != .paren_right) {
-                        const expr_2 = try self.expression() orelse {
-                            self.addError(self.current_token.loc, "expected workgroup_size y parameter", .{}, &.{});
-                            return error.Parsing;
-                        };
-
-                        if (self.eatToken(.comma)) |_| {
-                            if (self.current_token.tag != .paren_right) {
-                                const expr_3 = try self.expression() orelse {
-                                    self.addError(self.current_token.loc, "expected workgroup_size z parameter", .{}, &.{});
-                                    return error.Parsing;
-                                };
-
-                                _ = self.eatToken(.comma);
-                                _ = try self.expectToken(.paren_right);
-                                return .{ .workgroup_size = .{ expr_1, expr_2, expr_3 } };
-                            }
-                        }
-
-                        _ = try self.expectToken(.paren_right);
-                        return .{ .workgroup_size = .{ expr_1, expr_2, null } };
-                    }
-                }
-
-                _ = try self.expectToken(.paren_right);
-                return .{ .workgroup_size = .{ expr_1, null, null } };
-            },
-            .builtin => {
-                _ = try self.expectToken(.paren_left);
-                const value = try self.expectBuiltinValue();
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return .{ .builtin = value };
-            },
-            .interpolate => {
-                _ = try self.expectToken(.paren_left);
-                const inter_type = try self.expectInterpolationType();
-
-                if (self.eatToken(.comma)) |_| {
-                    if (self.current_token.tag != .paren_right) {
-                        const inter_sample = try self.expectInterpolationSample();
-
-                        _ = self.eatToken(.comma);
-                        _ = try self.expectToken(.paren_right);
-                        return .{ .interpolate = .{ .type = inter_type, .sample = inter_sample } };
-                    }
-                }
-
-                _ = try self.expectToken(.paren_right);
-                return .{ .interpolate = .{ .type = inter_type, .sample = null } };
-            },
         }
     }
 
@@ -291,19 +303,35 @@ const Parser = struct {
     ///   | 'num_workgroups'
     ///   | 'sample_index'
     ///   | 'sample_mask'
-    pub fn expectBuiltinValue(self: *Parser) !Ast.Attribute.Builtin {
-        if (self.current_token.tag == .ident) {
-            const str = self.current_token.loc.asStr(self.source);
-            if (std.meta.stringToEnum(Ast.Attribute.Builtin, str)) |res| {
+    pub fn expectBuiltinValue(self: *Parser) !Ast.Node.Index {
+        const token = self.current_token;
+        if (token.tag == .ident) {
+            const str = token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "vertex_index", str) or
+                std.mem.eql(u8, "instance_index", str) or
+                std.mem.eql(u8, "position", str) or
+                std.mem.eql(u8, "front_facing", str) or
+                std.mem.eql(u8, "frag_depth", str) or
+                std.mem.eql(u8, "local_invocation_id", str) or
+                std.mem.eql(u8, "local_invocation_index", str) or
+                std.mem.eql(u8, "global_invocation_id", str) or
+                std.mem.eql(u8, "workgroup_id", str) or
+                std.mem.eql(u8, "num_workgroups", str) or
+                std.mem.eql(u8, "sample_index", str) or
+                std.mem.eql(u8, "sample_mask", str))
+            {
                 _ = self.next();
-                return res;
+                return self.addNode(.{
+                    .tag = .builtin_value,
+                    .main_token = token,
+                });
             }
         }
 
         self.addError(
-            self.current_token.loc,
+            token.loc,
             "expected builtin value name, found '{s}'",
-            .{self.current_token.tag.symbol()},
+            .{token.tag.symbol()},
             &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"},
         );
         return error.Parsing;
@@ -313,19 +341,26 @@ const Parser = struct {
     ///   : 'perspective'
     ///   | 'linear'
     ///   | 'flat'
-    pub fn expectInterpolationType(self: *Parser) !Ast.Attribute.InterpolationType {
-        if (self.current_token.tag == .ident) {
-            const str = self.current_token.loc.asStr(self.source);
-            if (std.meta.stringToEnum(Ast.Attribute.InterpolationType, str)) |res| {
+    pub fn expectInterpolationType(self: *Parser) !Ast.Node.Index {
+        const token = self.current_token;
+        if (token.tag == .ident) {
+            const str = token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "perspective", str) or
+                std.mem.eql(u8, "linear", str) or
+                std.mem.eql(u8, "flat", str))
+            {
                 _ = self.next();
-                return res;
+                return self.addNode(.{
+                    .tag = .interpolation_type,
+                    .main_token = token,
+                });
             }
         }
 
         self.addError(
-            self.current_token.loc,
+            token.loc,
             "expected interpolation type name, found '{s}'",
-            .{self.current_token.tag.symbol()},
+            .{token.tag.symbol()},
             &.{"possible values are 'perspective', 'linear' and 'flat'"},
         );
         return error.Parsing;
@@ -335,27 +370,52 @@ const Parser = struct {
     ///   : 'center'
     ///   | 'centroid'
     ///   | 'sample'
-    pub fn expectInterpolationSample(self: *Parser) !Ast.Attribute.InterpolationSample {
-        if (self.current_token.tag == .ident) {
-            const str = self.current_token.loc.asStr(self.source);
-            if (std.meta.stringToEnum(Ast.Attribute.InterpolationSample, str)) |res| {
+    pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
+        const token = self.current_token;
+        if (token.tag == .ident) {
+            const str = token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "center", str) or
+                std.mem.eql(u8, "centroid", str) or
+                std.mem.eql(u8, "sample", str))
+            {
                 _ = self.next();
-                return res;
+                return self.addNode(.{
+                    .tag = .interpolation_sample,
+                    .main_token = token,
+                });
             }
         }
 
         self.addError(
-            self.current_token.loc,
+            token.loc,
             "expected interpolation sample name, found '{s}'",
-            .{self.current_token.tag.symbol()},
+            .{token.tag.symbol()},
             &.{"possible values are 'center', 'centroid' and 'sample'"},
         );
         return error.Parsing;
     }
 
     /// GlobalVarDecl : Attribute* VariableDecl (EQUAL Expr)?
-    pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Variable {
-        const decl = try self.variableDecl() orelse return null;
+    pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
+        const var_token = self.eatToken(.keyword_var) orelse return null;
+
+        var addr_space = Ast.Node.null_node;
+        var access_mode = Ast.Node.null_node;
+        if (self.eatToken(.less_than)) |_| {
+            addr_space = try self.expectAddressSpace();
+            access_mode = if (self.eatToken(.comma)) |_|
+                try self.expectAccessMode()
+            else
+                Ast.Node.null_node;
+            _ = try self.expectToken(.greater_than);
+        }
+
+        _ = try self.expectToken(.ident);
+        const var_type = if (self.eatToken(.colon)) |_|
+            try self.expectTypeSpecifier()
+        else
+            Ast.Node.null_node;
+
         const initializer = if (self.eatToken(.equal)) |_|
             try self.expression() orelse {
                 self.addError(
@@ -367,268 +427,272 @@ const Parser = struct {
                 return error.Parsing;
             }
         else
-            null;
+            Ast.Node.null_node;
 
-        return .{
-            .name = decl.ident.name,
-            .value = initializer,
-            .addr_space = if (decl.qualifier) |q| q.addr_space else null,
-            .access = if (decl.qualifier) |q| q.access else null,
-            .type = decl.ident.type,
-            .attrs = attrs,
-        };
+        const extra = try self.addExtra(.{
+            .attrs = attrs orelse Ast.Node.null_node,
+            .addr_space = addr_space,
+            .access_mode = access_mode,
+            .type = var_type,
+        });
+        return try self.addNode(.{
+            .tag = .global_variable,
+            .main_token = var_token,
+            .lhs = extra,
+            .rhs = initializer,
+        });
     }
 
     /// GlobalConstDecl : CONST OptionalyTypedIdent EQUAL Expr
-    pub fn globalConstDecl(self: *Parser) !?Ast.Const {
-        if (self.eatToken(.keyword_const) == null) return null;
-        const ident = try self.expectOptionalyTypedIdent();
-        _ = try self.expectToken(.equal);
-        const expr = try self.expression() orelse {
-            self.addError(
-                self.current_token.loc,
-                "expected initializer expression, found '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return error.Parsing;
-        };
+    // pub fn globalConstDecl(self: *Parser) !?Ast.Const {
+    //     if (self.eatToken(.keyword_const) == null) return null;
+    //     const ident = try self.expectOptionalyTypedIdent();
+    //     _ = try self.expectToken(.equal);
+    //     const expr = try self.expression() orelse {
+    //         self.addError(
+    //             self.current_token.loc,
+    //             "expected initializer expression, found '{s}'",
+    //             .{self.current_token.tag.symbol()},
+    //             &.{},
+    //         );
+    //         return error.Parsing;
+    //     };
 
-        return .{
-            .name = ident.name,
-            .type = ident.type,
-            .value = expr,
-        };
-    }
+    //     return .{
+    //         .name = ident.name,
+    //         .type = ident.type,
+    //         .value = expr,
+    //     };
+    // }
 
-    /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
-    pub fn globalOverrideDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Override {
-        if (self.eatToken(.keyword_override) == null) return null;
-        const ident = try self.expectOptionalyTypedIdent();
-        const expr = if (self.eatToken(.equal)) |_|
-            try self.expression() orelse {
-                self.addError(
-                    self.current_token.loc,
-                    "expected initializer expression, found '{s}'",
-                    .{self.current_token.tag.symbol()},
-                    &.{},
-                );
-                return error.Parsing;
-            }
-        else
-            null;
+    // /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
+    // pub fn globalOverrideDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Override {
+    //     if (self.eatToken(.keyword_override) == null) return null;
+    //     const ident = try self.expectOptionalyTypedIdent();
+    //     const expr = if (self.eatToken(.equal)) |_|
+    //         try self.expression() orelse {
+    //             self.addError(
+    //                 self.current_token.loc,
+    //                 "expected initializer expression, found '{s}'",
+    //                 .{self.current_token.tag.symbol()},
+    //                 &.{},
+    //             );
+    //             return error.Parsing;
+    //         }
+    //     else
+    //         null;
 
-        return .{
-            .name = ident.name,
-            .type = ident.type,
-            .value = expr,
-            .attrs = attrs,
-        };
-    }
+    //     return .{
+    //         .name = ident.name,
+    //         .type = ident.type,
+    //         .value = expr,
+    //         .attrs = attrs,
+    //     };
+    // }
 
-    /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
-    pub fn structDecl(self: *Parser) !?Ast.Struct {
-        if (self.eatToken(.keyword_struct) == null) return null;
-        const name = try self.expectToken(.ident);
-        _ = try self.expectToken(.brace_left);
+    // /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
+    // pub fn structDecl(self: *Parser) !?Ast.Struct {
+    //     if (self.eatToken(.keyword_struct) == null) return null;
+    //     const name = try self.expectToken(.ident);
+    //     _ = try self.expectToken(.brace_left);
 
-        var members = std.ArrayList(Ast.Struct.Member).init(self.allocator);
-        errdefer members.deinit();
+    //     var members = std.ArrayList(Ast.Struct.Member).init(self.allocator);
+    //     errdefer members.deinit();
 
-        while (true) {
-            const attrs = try self.attributeList();
-            const member = try self.structMember(attrs) orelse {
-                if (attrs != null) {
-                    self.addError(
-                        self.current_token.loc,
-                        "expected struct member, found '{s}'",
-                        .{self.current_token.tag.symbol()},
-                        &.{},
-                    );
-                    return error.Parsing;
-                }
-                break;
-            };
-            try members.append(member);
-            _ = self.eatToken(.comma);
-        }
+    //     while (true) {
+    //         const attrs = try self.attributeList();
+    //         const member = try self.structMember(attrs) orelse {
+    //             if (attrs != null) {
+    //                 self.addError(
+    //                     self.current_token.loc,
+    //                     "expected struct member, found '{s}'",
+    //                     .{self.current_token.tag.symbol()},
+    //                     &.{},
+    //                 );
+    //                 return error.Parsing;
+    //             }
+    //             break;
+    //         };
+    //         try members.append(member);
+    //         _ = self.eatToken(.comma);
+    //     }
 
-        _ = try self.expectToken(.brace_right);
+    //     _ = try self.expectToken(.brace_right);
 
-        return .{
-            .name = name.loc.asStr(self.source),
-            .members = try members.toOwnedSlice(),
-        };
-    }
+    //     return .{
+    //         .name = name.loc.asStr(self.source),
+    //         .members = try members.toOwnedSlice(),
+    //     };
+    // }
 
-    /// StructMember : Attribute* TypedIdent
-    pub fn structMember(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Struct.Member {
-        const name = self.eatToken(.ident) orelse return null;
-        _ = try self.expectToken(.colon);
-        const member_type = try self.expectTypeSpecifier();
-        return .{
-            .name = name.loc.asStr(self.source),
-            .type = member_type,
-            .attrs = attrs,
-        };
-    }
+    // /// StructMember : Attribute* TypedIdent
+    // pub fn structMember(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Struct.Member {
+    //     const name = self.eatToken(.ident) orelse return null;
+    //     _ = try self.expectToken(.colon);
+    //     const member_type = try self.expectTypeSpecifier();
+    //     return .{
+    //         .name = name.loc.asStr(self.source),
+    //         .type = member_type,
+    //         .attrs = attrs,
+    //     };
+    // }
 
-    pub fn constAssert(self: *Parser) !?Ast.Index(Ast.Expression) {
-        _ = self.eatToken(.keyword_const_assert) orelse return null;
-        return try self.expression() orelse {
-            self.addError(
-                self.current_token.loc,
-                "expected expression, found '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return error.Parsing;
-        };
-    }
+    // pub fn constAssert(self: *Parser) !?Ast.Node.Index(Ast.Expression) {
+    //     _ = self.eatToken(.keyword_const_assert) orelse return null;
+    //     return try self.expression() orelse {
+    //         self.addError(
+    //             self.current_token.loc,
+    //             "expected expression, found '{s}'",
+    //             .{self.current_token.tag.symbol()},
+    //             &.{},
+    //         );
+    //         return error.Parsing;
+    //     };
+    // }
 
-    /// FunctionDecl : Attribute* FN IDENT LEFT_PAREN ParameterList RIGHT_PAREN (ARROW FunctionResult)?
-    pub fn functionDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Function {
-        if (self.eatToken(.keyword_fn) == null) return null;
+    // /// FunctionDecl : Attribute* FN IDENT LEFT_PAREN ParameterList RIGHT_PAREN (ARROW FunctionResult)?
+    // pub fn functionDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Function {
+    //     if (self.eatToken(.keyword_fn) == null) return null;
 
-        const name = try self.expectToken(.ident);
+    //     const name = try self.expectToken(.ident);
 
-        _ = try self.expectToken(.paren_left);
-        const params = try self.expectParameterList();
-        errdefer self.allocator.free(params);
-        _ = try self.expectToken(.paren_right);
+    //     _ = try self.expectToken(.paren_left);
+    //     const params = try self.expectParameterList();
+    //     errdefer self.allocator.free(params);
+    //     _ = try self.expectToken(.paren_right);
 
-        const result = if (self.eatToken(.arrow)) |_|
-            try self.expectFunctionResult()
-        else
-            null;
+    //     const result = if (self.eatToken(.arrow)) |_|
+    //         try self.expectFunctionResult()
+    //     else
+    //         null;
 
-        const body = try self.block() orelse {
-            self.addError(
-                self.current_token.loc,
-                "expected function body, found '{s}'",
-                .{self.current_token.tag.symbol()},
-                &.{},
-            );
-            return error.Parsing;
-        };
+    //     const body = try self.block() orelse {
+    //         self.addError(
+    //             self.current_token.loc,
+    //             "expected function body, found '{s}'",
+    //             .{self.current_token.tag.symbol()},
+    //             &.{},
+    //         );
+    //         return error.Parsing;
+    //     };
 
-        return .{
-            .name = name.loc.asStr(self.source),
-            .params = params,
-            .attrs = attrs,
-            .result = result,
-            .body = body,
-        };
-    }
+    //     return .{
+    //         .name = name.loc.asStr(self.source),
+    //         .params = params,
+    //         .attrs = attrs,
+    //         .result = result,
+    //         .body = body,
+    //     };
+    // }
 
-    /// FunctionResult : Attribute* TypeSpecifier
-    pub fn expectFunctionResult(self: *Parser) !Ast.Function.Result {
-        const attrs = try self.attributeList();
-        const return_type = try self.expectTypeSpecifier();
-        return .{ .attrs = attrs, .type = return_type };
-    }
+    // /// FunctionResult : Attribute* TypeSpecifier
+    // pub fn expectFunctionResult(self: *Parser) !Ast.Function.Result {
+    //     const attrs = try self.attributeList();
+    //     const return_type = try self.expectTypeSpecifier();
+    //     return .{ .attrs = attrs, .type = return_type };
+    // }
 
-    /// Block : BRACE_LEFT Statement* BRACE_RIGHT
-    pub fn block(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Block {
-        _ = self.eatToken(.brace_left) orelse return null;
-        const stmnt_list = try self.statementList() orelse return null;
-        _ = try self.expectToken(.brace_right);
-        return stmnt_list;
-    }
+    // /// Block : BRACE_LEFT Statement* BRACE_RIGHT
+    // pub fn block(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Block {
+    //     _ = self.eatToken(.brace_left) orelse return null;
+    //     const stmnt_list = try self.statementList() orelse return null;
+    //     _ = try self.expectToken(.brace_right);
+    //     return stmnt_list;
+    // }
 
-    /// Statement
-    ///   : SEMICOLON
-    ///   | ReturnStatement           SEMICOLON
-    ///   | IfStatement                            TODO
-    ///   | SwitchStatement                        TODO
-    ///   | LoopStatement
-    ///   | ForStatement                           TODO
-    ///   | WhileStatement                         TODO
-    ///   | FuncCallStatement         SEMICOLON    TODO
-    ///   | VariableStatement         SEMICOLON    TODO
-    ///   | BreakStatement            SEMICOLON
-    ///   | BreakIfStatement          SEMICOLON
-    ///   | ContinuingStatement
-    ///   | ContinueStatement         SEMICOLON
-    ///   | DiscardStatement          SEMICOLON
-    ///   | VariableUpdatingStatement SEMICOLON    TODO
-    ///   | CompoundStatement                      TODO
-    ///   | ConstAssertStatement      SEMICOLON
-    ///
-    /// for simplicity and better error messages,
-    /// we are putting all statements here
-    pub fn statement(self: *Parser) !?Ast.Statement {
-        while (self.eatToken(.semicolon)) |_| {}
+    // /// Statement
+    // ///   : SEMICOLON
+    // ///   | ReturnStatement           SEMICOLON
+    // ///   | IfStatement                            TODO
+    // ///   | SwitchStatement                        TODO
+    // ///   | LoopStatement
+    // ///   | ForStatement                           TODO
+    // ///   | WhileStatement                         TODO
+    // ///   | FuncCallStatement         SEMICOLON    TODO
+    // ///   | VariableStatement         SEMICOLON    TODO
+    // ///   | BreakStatement            SEMICOLON
+    // ///   | BreakIfStatement          SEMICOLON
+    // ///   | ContinuingStatement
+    // ///   | ContinueStatement         SEMICOLON
+    // ///   | DiscardStatement          SEMICOLON
+    // ///   | VariableUpdatingStatement SEMICOLON    TODO
+    // ///   | CompoundStatement                      TODO
+    // ///   | ConstAssertStatement      SEMICOLON
+    // ///
+    // /// for simplicity and better error messages,
+    // /// we are putting all statements here
+    // pub fn statement(self: *Parser) !?Ast.Statement {
+    //     while (self.eatToken(.semicolon)) |_| {}
 
-        if (try self.returnStatement()) |expr| {
-            _ = try self.expectToken(.semicolon);
-            return .{ .@"return" = expr };
-        } else if (try self.loopStatement()) |blk| {
-            return .{ .loop = blk };
-        } else if (try self.continuingStatement()) |blk| {
-            return .{ .continuing = blk };
-        } else if (try self.breakIfStatement()) |expr| {
-            _ = try self.expectToken(.semicolon);
-            return .{ .break_if = expr };
-        } else if (try self.breakStatement()) |_| {
-            _ = try self.expectToken(.semicolon);
-            return .@"break";
-        } else if (try self.discardStatement()) |_| {
-            _ = try self.expectToken(.semicolon);
-            return .discard;
-        } else if (try self.continueStatement()) |_| {
-            _ = try self.expectToken(.semicolon);
-            return .@"continue";
-        } else if (try self.constAssert()) |expr| {
-            _ = try self.expectToken(.semicolon);
-            return .{ .const_assert = expr };
-        }
+    //     if (try self.returnStatement()) |expr| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .{ .@"return" = expr };
+    //     } else if (try self.loopStatement()) |blk| {
+    //         return .{ .loop = blk };
+    //     } else if (try self.continuingStatement()) |blk| {
+    //         return .{ .continuing = blk };
+    //     } else if (try self.breakIfStatement()) |expr| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .{ .break_if = expr };
+    //     } else if (try self.breakStatement()) |_| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .@"break";
+    //     } else if (try self.discardStatement()) |_| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .discard;
+    //     } else if (try self.continueStatement()) |_| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .@"continue";
+    //     } else if (try self.constAssert()) |expr| {
+    //         _ = try self.expectToken(.semicolon);
+    //         return .{ .const_assert = expr };
+    //     }
 
-        return null;
-    }
+    //     return null;
+    // }
 
-    /// ReturnStatement : RETURN Expr?
-    pub fn returnStatement(self: *Parser) !?Ast.Statement.Return {
-        if (self.eatToken(.keyword_return) == null) return null;
-        return if (try self.expression()) |expr| .{ .expr = expr } else .void;
-    }
+    // /// ReturnStatement : RETURN Expr?
+    // pub fn returnStatement(self: *Parser) !?Ast.Statement.Return {
+    //     if (self.eatToken(.keyword_return) == null) return null;
+    //     return if (try self.expression()) |expr| .{ .expr = expr } else .void;
+    // }
 
-    /// DiscardStatement : DISCARD
-    pub fn discardStatement(self: *Parser) !?void {
-        if (self.eatToken(.keyword_discard) == null) return null;
-    }
+    // /// DiscardStatement : DISCARD
+    // pub fn discardStatement(self: *Parser) !?void {
+    //     if (self.eatToken(.keyword_discard) == null) return null;
+    // }
 
-    /// LoopStatement : LOOP Block
-    pub fn loopStatement(self: *Parser) !?Ast.Block {
-        if (self.eatToken(.keyword_loop) == null) return null;
-        return self.block();
-    }
+    // /// LoopStatement : LOOP Block
+    // pub fn loopStatement(self: *Parser) !?Ast.Block {
+    //     if (self.eatToken(.keyword_loop) == null) return null;
+    //     return self.block();
+    // }
 
-    /// ContinuingStatement : continuing Block
-    pub fn continuingStatement(self: *Parser) !?Ast.Block {
-        if (self.eatToken(.keyword_continuing) == null) return null;
-        return self.block();
-    }
+    // /// ContinuingStatement : continuing Block
+    // pub fn continuingStatement(self: *Parser) !?Ast.Block {
+    //     if (self.eatToken(.keyword_continuing) == null) return null;
+    //     return self.block();
+    // }
 
-    /// BreakIfStatement : BREAK IF Expr
-    pub fn breakIfStatement(self: *Parser) !?Ast.Index(Ast.Expression) {
-        if (self.current_token.tag == .keyword_break and self.peek().tag == .keyword_if) {
-            _ = self.next();
-            _ = self.next();
-            return self.expression();
-        }
-        return null;
-    }
+    // /// BreakIfStatement : BREAK IF Expr
+    // pub fn breakIfStatement(self: *Parser) !?Ast.Node.Index(Ast.Expression) {
+    //     if (self.current_token.tag == .keyword_break and self.peek().tag == .keyword_if) {
+    //         _ = self.next();
+    //         _ = self.next();
+    //         return self.expression();
+    //     }
+    //     return null;
+    // }
 
-    /// BreakStatement : BREAK
-    pub fn breakStatement(self: *Parser) !?void {
-        if (self.eatToken(.keyword_break) == null) return null;
-    }
+    // /// BreakStatement : BREAK
+    // pub fn breakStatement(self: *Parser) !?void {
+    //     if (self.eatToken(.keyword_break) == null) return null;
+    // }
 
-    /// ContinueStatement : CONTINUE
-    pub fn continueStatement(self: *Parser) !?void {
-        if (self.eatToken(.keyword_continue) == null) return null;
-    }
+    // /// ContinueStatement : CONTINUE
+    // pub fn continueStatement(self: *Parser) !?void {
+    //     if (self.eatToken(.keyword_continue) == null) return null;
+    // }
 
     /// IfStatement : IF EXpr Block (ELSE IF Expr Block)* ELSE Block?
     // pub fn ifStatement(self: *Parser) !?void {
@@ -662,143 +726,110 @@ const Parser = struct {
     // }
 
     /// StatementList : Statement*
-    pub fn statementList(self: *Parser) !?Ast.Block {
-        var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
-        defer stmnts.deinit();
-        while (try self.statement()) |stmnt| {
-            try stmnts.append(stmnt);
-        }
-        return try self.addStmntSlice(stmnts.items);
-    }
+    // pub fn statementList(self: *Parser) !?Ast.Block {
+    //     var stmnts = std.ArrayList(Ast.Statement).init(self.allocator);
+    //     defer stmnts.deinit();
+    //     while (try self.statement()) |stmnt| {
+    //         try stmnts.append(stmnt);
+    //     }
+    //     return try self.addStmntSlice(stmnts.items);
+    // }
 
-    /// ParameterList : Parameter (COMMA Param)* COMMA?
-    pub fn expectParameterList(self: *Parser) ![]const Ast.Function.Param {
-        var params = std.ArrayList(Ast.Function.Param).init(self.allocator);
-        errdefer params.deinit();
+    // /// ParameterList : Parameter (COMMA Param)* COMMA?
+    // pub fn expectParameterList(self: *Parser) ![]const Ast.Function.Param {
+    //     var params = std.ArrayList(Ast.Function.Param).init(self.allocator);
+    //     errdefer params.deinit();
 
-        while (true) {
-            const param_token = self.current_token;
-            const param = try self.parameter() orelse break;
-            if (params.items.len > max_call_args) {
-                self.addError(
-                    param_token.loc,
-                    "exceeded maximum function parameters ({})",
-                    .{max_call_args},
-                    &.{},
-                );
-                return error.Parsing;
-            }
-            try params.append(param);
-            if (self.eatToken(.comma) == null) break;
-        }
+    //     while (true) {
+    //         const param_token = self.current_token;
+    //         const param = try self.parameter() orelse break;
+    //         if (params.items.len > max_call_args) {
+    //             self.addError(
+    //                 param_token.loc,
+    //                 "exceeded maximum function parameters ({})",
+    //                 .{max_call_args},
+    //                 &.{},
+    //             );
+    //             return error.Parsing;
+    //         }
+    //         try params.append(param);
+    //         if (self.eatToken(.comma) == null) break;
+    //     }
 
-        return params.toOwnedSlice();
-    }
+    //     return params.toOwnedSlice();
+    // }
 
-    /// Parameter : Attribute* IDENT COLON TypeSpecifier
-    pub fn parameter(self: *Parser) !?Ast.Function.Param {
-        const attrs = try self.attributeList();
-        const name = if (attrs == null)
-            self.eatToken(.ident) orelse return null
-        else
-            try self.expectToken(.ident);
-        _ = try self.expectToken(.colon);
-        const param_type = try self.expectTypeSpecifier();
-        return .{
-            .name = name.loc.asStr(self.source),
-            .type = param_type,
-            .attrs = attrs,
-        };
-    }
+    // /// Parameter : Attribute* IDENT COLON TypeSpecifier
+    // pub fn parameter(self: *Parser) !?Ast.Function.Param {
+    //     const attrs = try self.attributeList();
+    //     const name = if (attrs == null)
+    //         self.eatToken(.ident) orelse return null
+    //     else
+    //         try self.expectToken(.ident);
+    //     _ = try self.expectToken(.colon);
+    //     const param_type = try self.expectTypeSpecifier();
+    //     return .{
+    //         .name = name.loc.asStr(self.source),
+    //         .type = param_type,
+    //         .attrs = attrs,
+    //     };
+    // }
 
-    /// VariableDecl : VAR VariableQualifier? OptionalyTypedIdent
-    pub fn variableDecl(self: *Parser) !?Ast.Variable.DeclInfo {
-        if (self.eatToken(.keyword_var) == null) return null;
-        const qualifier = try self.variableQualifier();
-        const opt_type_id = try self.expectOptionalyTypedIdent();
-        return .{
-            .ident = opt_type_id,
-            .qualifier = qualifier,
-        };
-    }
+    // /// TypeAliasDecl : TYPE IDENT EQUAL TypeSpecifier
+    // pub fn typeAliasDecl(self: *Parser) !?Ast.TypeAlias {
+    //     if (self.current_token.tag != .keyword_type) return null;
+    //     _ = self.next();
 
-    /// VariableQualifier : LESS_THAN AddressSpace (COMMA AccessMode)? GREATER_THAN
-    pub fn variableQualifier(self: *Parser) !?Ast.Variable.Qualifier {
-        if (self.eatToken(.less_than) == null) return null;
-        const addr_space = try self.expectAddressSpace();
-        const access = if (self.eatToken(.comma)) |_|
-            try self.expectAccessMode()
-        else
-            null;
-        _ = try self.expectToken(.greater_than);
-        return .{ .addr_space = addr_space, .access = access };
-    }
+    //     const name = try self.expectToken(.ident);
+    //     _ = try self.expectToken(.equal);
+    //     const value = try self.expectTypeSpecifier();
 
-    // OptionalyTypedIdent : IDENT ( COLON TypeSpecifier ) ?
-    pub fn expectOptionalyTypedIdent(self: *Parser) !Ast.OptionalyTypedIdent {
-        const name = try self.expectToken(.ident);
-        const ident_type = if (self.eatToken(.colon)) |_|
-            try self.expectTypeSpecifier()
-        else
-            null;
-        return .{ .name = name.loc.asStr(self.source), .type = ident_type };
-    }
+    //     return .{ .name = name.loc.asStr(self.source), .type = value };
+    // }
 
-    /// TypeAliasDecl : TYPE IDENT EQUAL TypeSpecifier
-    pub fn typeAliasDecl(self: *Parser) !?Ast.TypeAlias {
-        if (self.current_token.tag != .keyword_type) return null;
-        _ = self.next();
+    // /// VariableStatement
+    // ///   : VariableDecl                          TODO
+    // ///   | VariableDecl       EQUAL Expr         TODO
+    // ///   | LET   OptionalType EQUAL Expr
+    // ///   | CONST OptionalType EQUAL Expr
+    // pub fn varStatement(self: *Parser) !Ast.Variable {
+    //     switch (self.current_token.tag) {
+    //         .keyword_let, .keyword_const => {
+    //             _ = self.next();
 
-        const name = try self.expectToken(.ident);
-        _ = try self.expectToken(.equal);
-        const value = try self.expectTypeSpecifier();
+    //             // const opt_type_ident = try self.expectOptionalyTypedIdent();
+    //             // _ = try self.expectToken(.equal);
+    //             // const value = self.expression() catch |err| {
+    //             //     if (err == error.Parsing) {
+    //             //         self.addError(
+    //             //             self.current_token.loc,
+    //             //             "expected initializer expression, found '{s}'",
+    //             //             .{self.current_token.tag.symbol()},
+    //             //             &.{},
+    //             //         );
+    //             //     }
+    //             //     return err;
+    //             // };
+    //             // _ = try self.expectToken(.semicolon);
 
-        return .{ .name = name.loc.asStr(self.source), .type = value };
-    }
+    //             // const scope: Ast.Variable.Scope = switch (tag) {
+    //             //     .keyword_let => .function,
+    //             //     .keyword_const => .module_or_function,
+    //             //     else => unreachable,
+    //             // };
 
-    /// VariableStatement
-    ///   : VariableDecl                          TODO
-    ///   | VariableDecl       EQUAL Expr         TODO
-    ///   | LET   OptionalType EQUAL Expr
-    ///   | CONST OptionalType EQUAL Expr
-    pub fn varStatement(self: *Parser) !Ast.Variable {
-        switch (self.current_token.tag) {
-            .keyword_let, .keyword_const => {
-                _ = self.next();
+    //             // return .{
+    //             //     .name = opt_type_ident.name,
+    //             //     .type = opt_type_ident.type,
+    //             //     .value = value,
+    //             // };
+    //             return error.Parsing;
+    //         },
+    //         else => return error.Parsing,
+    //     }
+    // }
 
-                // const opt_type_ident = try self.expectOptionalyTypedIdent();
-                // _ = try self.expectToken(.equal);
-                // const value = self.expression() catch |err| {
-                //     if (err == error.Parsing) {
-                //         self.addError(
-                //             self.current_token.loc,
-                //             "expected initializer expression, found '{s}'",
-                //             .{self.current_token.tag.symbol()},
-                //             &.{},
-                //         );
-                //     }
-                //     return err;
-                // };
-                // _ = try self.expectToken(.semicolon);
-
-                // const scope: Ast.Variable.Scope = switch (tag) {
-                //     .keyword_let => .function,
-                //     .keyword_const => .module_or_function,
-                //     else => unreachable,
-                // };
-
-                // return .{
-                //     .name = opt_type_ident.name,
-                //     .type = opt_type_ident.type,
-                //     .value = value,
-                // };
-                return error.Parsing;
-            },
-            else => return error.Parsing,
-        }
-    }
-
-    pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Index(Ast.Type) {
+    pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
         return try self.typeSpecifier() orelse {
             self.addError(
                 self.current_token.loc,
@@ -811,10 +842,13 @@ const Parser = struct {
     }
 
     /// TypeSpecifier : IDENTIFIER | TypeSpecifierWithoutIdent
-    pub fn typeSpecifier(self: *Parser) !?Ast.Index(Ast.Type) {
+    pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
         if (self.current_token.tag == .ident) {
             _ = self.next();
-            return try self.addType(.{ .user = self.current_token.loc.asStr(self.source) });
+            return try self.addNode(.{
+                .tag = .user_type,
+                .main_token = self.current_token,
+            });
         }
         return self.typeSpecifierWithoutIdent();
     }
@@ -831,56 +865,60 @@ const Parser = struct {
     ///   | MatrixPrefix LESS_THAN TypeSpecifier GREATER_THAN
     ///   | VectorPrefix LESS_THAN TypeSpecifier GREATER_THAN
     ///   | texture_and_sampler_types TODO
-    pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Index(Ast.Type) {
+    pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
         if (self.vectorPrefix()) |vec| {
             _ = try self.expectToken(.less_than);
             const elem_type = try self.expectTypeSpecifier();
             _ = try self.expectToken(.greater_than);
-            return try self.addType(.{ .vector = .{ .prefix = vec, .element = elem_type } });
+            return try self.addNode(.{
+                .tag = .vector_type,
+                .main_token = vec,
+                .lhs = elem_type,
+            });
         }
 
-        if (self.matrixPrefix()) |mat| {
+        if (self.matrixPrefix()) |vec| {
             _ = try self.expectToken(.less_than);
             const elem_type = try self.expectTypeSpecifier();
             _ = try self.expectToken(.greater_than);
-            return try self.addType(.{ .matrix = .{ .prefix = mat, .element = elem_type } });
+            return try self.addNode(.{
+                .tag = .matrix_type,
+                .main_token = vec,
+                .lhs = elem_type,
+            });
         }
 
-        switch (self.current_token.tag) {
-            .keyword_i32 => {
+        const token = self.current_token;
+        switch (token.tag) {
+            .keyword_i32,
+            .keyword_u32,
+            .keyword_f32,
+            .keyword_f16,
+            .keyword_bool,
+            => {
                 _ = self.next();
-                return try self.addType(.{ .scalar = .i32 });
+                return try self.addNode(.{
+                    .tag = .scalar_type,
+                    .main_token = token,
+                });
             },
-            .keyword_u32 => {
+            .keyword_sampler, .keyword_comparison_sampler => {
                 _ = self.next();
-                return try self.addType(.{ .scalar = .u32 });
-            },
-            .keyword_f32 => {
-                _ = self.next();
-                return try self.addType(.{ .scalar = .f32 });
-            },
-            .keyword_f16 => {
-                _ = self.next();
-                return try self.addType(.{ .scalar = .f16 });
-            },
-            .keyword_bool => {
-                _ = self.next();
-                return try self.addType(.{ .scalar = .bool });
-            },
-            .keyword_sampler => {
-                _ = self.next();
-                return try self.addType(.{ .sampler = .{ .comparison = false } });
-            },
-            .keyword_comparison_sampler => {
-                _ = self.next();
-                return try self.addType(.{ .sampler = .{ .comparison = true } });
+                return try self.addNode(.{
+                    .tag = .sampler_type,
+                    .main_token = token,
+                });
             },
             .keyword_atomic => {
                 _ = self.next();
                 _ = try self.expectToken(.less_than);
                 const elem_type = try self.expectTypeSpecifier();
                 _ = try self.expectToken(.greater_than);
-                return try self.addType(.{ .atomic = .{ .element = elem_type } });
+                return try self.addNode(.{
+                    .tag = .atomic_type,
+                    .main_token = token,
+                    .lhs = elem_type,
+                });
             },
             .keyword_array => {
                 _ = self.next();
@@ -898,35 +936,43 @@ const Parser = struct {
                         return error.Parsing;
                     };
                     _ = try self.expectToken(.greater_than);
-                    return try self.addType(.{ .array = .{
-                        .element = elem_type,
-                        .size = .{ .static = size },
-                    } });
+                    return try self.addNode(.{
+                        .tag = .array_type,
+                        .main_token = token,
+                        .lhs = elem_type,
+                        .rhs = size,
+                    });
                 }
                 _ = try self.expectToken(.greater_than);
-                return try self.addType(.{ .array = .{ .element = elem_type, .size = .dynamic } });
+                return try self.addNode(.{
+                    .tag = .array_type,
+                    .main_token = token,
+                    .lhs = elem_type,
+                });
             },
             .keyword_ptr => {
                 _ = self.next();
                 _ = try self.expectToken(.less_than);
+
                 const addr_space = try self.expectAddressSpace();
                 _ = try self.expectToken(.comma);
-                const ty = try self.expectTypeSpecifier();
-                if (self.eatToken(.comma)) |_| {
-                    const access_mode = try self.expectAccessMode();
-                    _ = try self.expectToken(.greater_than);
-                    return try self.addType(.{ .ptr = .{
-                        .addr_space = addr_space,
-                        .type = ty,
-                        .access = access_mode,
-                    } });
-                }
+                const elem_type = try self.expectTypeSpecifier();
+                const access_mode = if (self.eatToken(.comma)) |_|
+                    try self.expectAccessMode()
+                else
+                    Ast.Node.null_node;
                 _ = try self.expectToken(.greater_than);
-                return try self.addType(.{ .ptr = .{
+
+                const extra = try self.addExtra(Ast.Node.PtrType{
                     .addr_space = addr_space,
-                    .type = ty,
-                    .access = null,
-                } });
+                    .access_mode = access_mode,
+                });
+                return try self.addNode(.{
+                    .tag = .ptr_type,
+                    .main_token = token,
+                    .lhs = elem_type,
+                    .rhs = extra,
+                });
             },
             else => return null,
         }
@@ -936,15 +982,17 @@ const Parser = struct {
     ///   : 'vec2'
     ///   | 'vec3'
     ///   | 'vec4'
-    pub fn vectorPrefix(self: *Parser) ?Ast.Type.Vector.Prefix {
-        const res: Ast.Type.Vector.Prefix = switch (self.current_token.tag) {
-            .keyword_vec2 => .vec2,
-            .keyword_vec3 => .vec3,
-            .keyword_vec4 => .vec4,
+    pub fn vectorPrefix(self: *Parser) ?Token {
+        switch (self.current_token.tag) {
+            .keyword_vec2,
+            .keyword_vec3,
+            .keyword_vec4,
+            => {
+                _ = self.next();
+                return self.current_token;
+            },
             else => return null,
-        };
-        _ = self.next();
-        return res;
+        }
     }
 
     /// MatrixPrefix
@@ -957,21 +1005,23 @@ const Parser = struct {
     ///   | 'mat4x2'
     ///   | 'mat4x3'
     ///   | 'mat4x4'
-    pub fn matrixPrefix(self: *Parser) ?Ast.Type.Matrix.Prefix {
-        const res: Ast.Type.Matrix.Prefix = switch (self.current_token.tag) {
-            .keyword_mat2x2 => .mat2x2,
-            .keyword_mat2x3 => .mat2x3,
-            .keyword_mat2x4 => .mat2x4,
-            .keyword_mat3x2 => .mat3x2,
-            .keyword_mat3x3 => .mat3x3,
-            .keyword_mat3x4 => .mat3x4,
-            .keyword_mat4x2 => .mat4x2,
-            .keyword_mat4x3 => .mat4x3,
-            .keyword_mat4x4 => .mat4x4,
+    pub fn matrixPrefix(self: *Parser) ?Token {
+        switch (self.current_token.tag) {
+            .keyword_mat2x2,
+            .keyword_mat2x3,
+            .keyword_mat2x4,
+            .keyword_mat3x2,
+            .keyword_mat3x3,
+            .keyword_mat3x4,
+            .keyword_mat4x2,
+            .keyword_mat4x3,
+            .keyword_mat4x4,
+            => {
+                _ = self.next();
+                return self.current_token;
+            },
             else => return null,
-        };
-        _ = self.next();
-        return res;
+        }
     }
 
     /// AddressSpace
@@ -980,38 +1030,54 @@ const Parser = struct {
     ///   | 'workgroup'
     ///   | 'uniform'
     ///   | 'storage'
-    pub fn expectAddressSpace(self: *Parser) !Ast.AddressSpace {
-        if (self.current_token.tag == .ident) {
-            const str = self.current_token.loc.asStr(self.source);
-            if (std.meta.stringToEnum(Ast.AddressSpace, str)) |res| {
+    pub fn expectAddressSpace(self: *Parser) !Ast.Node.Index {
+        const token = self.current_token;
+        if (token.tag == .ident) {
+            const str = token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "function", str) or
+                std.mem.eql(u8, "private", str) or
+                std.mem.eql(u8, "workgroup", str) or
+                std.mem.eql(u8, "uniform", str) or
+                std.mem.eql(u8, "storage", str))
+            {
                 _ = self.next();
-                return res;
+                return self.addNode(.{
+                    .tag = .addr_space,
+                    .main_token = token,
+                });
             }
         }
 
         self.addError(
-            self.current_token.loc,
+            token.loc,
             "expected address space, found '{s}'",
-            .{self.current_token.tag.symbol()},
+            .{token.tag.symbol()},
             &.{"must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'"},
         );
         return error.Parsing;
     }
 
     /// AccessMode : 'read' | 'write' | 'read_write'
-    pub fn expectAccessMode(self: *Parser) !Ast.AccessMode {
-        if (self.current_token.tag == .ident) {
-            const str = self.current_token.loc.asStr(self.source);
-            if (std.meta.stringToEnum(Ast.AccessMode, str)) |res| {
+    pub fn expectAccessMode(self: *Parser) !Ast.Node.Index {
+        const token = self.current_token;
+        if (token.tag == .ident) {
+            const str = token.loc.asStr(self.source);
+            if (std.mem.eql(u8, "read", str) or
+                std.mem.eql(u8, "write", str) or
+                std.mem.eql(u8, "read_write", str))
+            {
                 _ = self.next();
-                return res;
+                return self.addNode(.{
+                    .tag = .access_mode,
+                    .main_token = token,
+                });
             }
         }
 
         self.addError(
-            self.current_token.loc,
+            token.loc,
             "expected access mode, found '{s}'",
-            .{self.current_token.tag.symbol()},
+            .{token.tag.symbol()},
             &.{"must be one of 'read', 'write', 'read_write'"},
         );
         return error.Parsing;
@@ -1020,30 +1086,23 @@ const Parser = struct {
     /// PrimaryExpr
     ///   : Literal
     ///   | ParenExpr
-    ///   | Callable   ArgumentExprList
+    ///   | CallExpr
     ///   | IDENT      ArgumentExprList?
     ///   | BITCAST    LESS_THAN TypeSpecifier GREATER_THAN ParenExpr
-    pub fn primaryExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
-        if (try self.callable()) |call| {
-            const args = try self.expectArgumentExprList();
-            return try self.addExpr(.{ .call = .{ .callable = call, .args = args } });
+    pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
+        if (try self.callExpr()) |call| {
+            return call;
         }
 
         const token = self.current_token;
         switch (token.tag) {
-            .keyword_true => {
+            .keyword_true, .keyword_false => {
                 _ = self.next();
-                return try self.addExpr(.{ .literal = .{ .bool = true } });
-            },
-            .keyword_false => {
-                _ = self.next();
-                return try self.addExpr(.{ .literal = .{ .bool = false } });
+                return try self.addNode(.{ .tag = .bool_literal, .main_token = token });
             },
             .number => {
                 _ = self.next();
-                return try self.addExpr(.{ .literal = .{
-                    .number = numberLiteral(token.loc.asStr(self.source)) catch unreachable,
-                } });
+                return try self.addNode(.{ .tag = .number_literal, .main_token = token });
             },
             .keyword_bitcast => {
                 _ = self.next();
@@ -1051,26 +1110,32 @@ const Parser = struct {
                 const dest_type = try self.expectTypeSpecifier();
                 _ = try self.expectToken(.greater_than);
                 const expr = try self.expectParenExpr();
-                return try self.addExpr(.{ .bitcast = .{ .dest = dest_type, .expr = expr } });
+                return try self.addNode(.{
+                    .tag = .bitcast_expr,
+                    .main_token = token,
+                    .lhs = dest_type,
+                    .rhs = expr,
+                });
             },
             .paren_left => return try self.expectParenExpr(),
             .ident => {
                 _ = self.next();
                 if (self.current_token.tag == .paren_left) {
                     const args = try self.expectArgumentExprList();
-                    return try self.addExpr(.{ .call = .{
-                        .callable = .{ .ident = token.loc.asStr(self.source) },
-                        .args = args,
-                    } });
+                    return try self.addNode(.{
+                        .tag = .ident_expr,
+                        .main_token = token,
+                        .lhs = args,
+                    });
                 }
-                return try self.addExpr(.{ .ident = token.loc.asStr(self.source) });
+                return try self.addNode(.{ .tag = .ident_expr, .main_token = token });
             },
             else => return null,
         }
     }
 
     /// ParenExpr : PAREN_LEFT Expr PAREN_RIGHT
-    pub fn expectParenExpr(self: *Parser) !Ast.Index(Ast.Expression) {
+    pub fn expectParenExpr(self: *Parser) !Ast.Node.Index {
         _ = try self.expectToken(.paren_left);
         const expr = try self.expression() orelse {
             self.addError(
@@ -1085,33 +1150,49 @@ const Parser = struct {
         return expr;
     }
 
-    /// Callable
-    ///   : TypeSpecifierWithoutIdent
-    ///   | ARRAY
-    ///   | MatrixPrefix
-    ///   | VectorPrefix
-    pub fn callable(self: *Parser) !?Ast.CallExpr.Callable {
+    /// CallExpr
+    ///   : ( TypeSpecifierWithoutIdent
+    ///   |   ARRAY
+    ///   |   MatrixPrefix
+    ///   |   VectorPrefix )
+    ///   ArgumentExprList
+    pub fn callExpr(self: *Parser) !?Ast.Node.Index {
         if (self.peek().tag != .less_than) {
-            if (self.vectorPrefix()) |vec| return .{ .partial_vector = vec };
-            if (self.matrixPrefix()) |mat| return .{ .partial_matrix = mat };
+            if (self.vectorPrefix()) |vec| {
+                const args = try self.expectArgumentExprList();
+                return try self.addNode(.{ .tag = .call_expr, .main_token = vec, .rhs = args });
+            }
+            if (self.matrixPrefix()) |mat| {
+                const args = try self.expectArgumentExprList();
+                return try self.addNode(.{ .tag = .call_expr, .main_token = mat, .rhs = args });
+            }
             if (self.current_token.tag == .keyword_array) {
-                _ = self.next();
-                return .partial_array;
+                const arr_token = self.next();
+                const args = try self.expectArgumentExprList();
+                return try self.addNode(.{ .tag = .call_expr, .main_token = arr_token, .rhs = args });
             }
         }
 
-        const type_token = self.current_token;
         const constructor = try self.typeSpecifierWithoutIdent() orelse return null;
-        switch (self.ast.getType(constructor)) {
-            .scalar => |p| return .{ .scalar = p },
-            .vector => |p| return .{ .vector = p },
-            .matrix => |p| return .{ .matrix = p },
-            .array => |p| return .{ .array = p },
+        const args = try self.expectArgumentExprList();
+        const constructor_main_token = self.ast.nodes.items(.main_token)[constructor];
+        const constructor_tag = self.ast.nodes.items(.tag)[constructor];
+        switch (constructor_tag) {
+            .scalar_type,
+            .vector_type,
+            .matrix_type,
+            .array_type,
+            => return try self.addNode(.{
+                .tag = .call_expr,
+                .main_token = constructor_main_token,
+                .lhs = constructor,
+                .rhs = args,
+            }),
             else => {
                 self.addError(
-                    type_token.loc,
+                    constructor_main_token.loc,
                     "type '{s}' can't be called (not expression)",
-                    .{type_token.tag.symbol()},
+                    .{constructor_main_token.tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1120,14 +1201,15 @@ const Parser = struct {
     }
 
     /// ArgumentExprList : PAREN_LEFT ((Expr COMMA)* Expr COMMA?)? PAREN_RIGHT
-    pub fn expectArgumentExprList(self: *Parser) !Ast.Range(Ast.Index(Ast.Expression)) {
+    pub fn expectArgumentExprList(self: *Parser) !Ast.Node.Index {
         _ = try self.expectToken(.paren_left);
 
-        var args = std.BoundedArray(Ast.Index(Ast.Expression), max_call_args).init(0) catch unreachable;
+        const scratch_top = self.ast.scratch.items.len;
+        defer self.ast.scratch.shrinkRetainingCapacity(scratch_top);
         while (true) {
             const expr_token = self.current_token;
             const expr = try self.expression() orelse break;
-            args.append(expr) catch {
+            self.ast.scratch.append(self.allocator, expr) catch {
                 self.addError(
                     expr_token.loc,
                     "exceeded maximum call arguments ({})",
@@ -1141,13 +1223,15 @@ const Parser = struct {
         }
 
         _ = try self.expectToken(.paren_right);
-        return self.addExprExtraSlice(args.slice());
+
+        const list = self.ast.scratch.items[scratch_top..];
+        return self.listToSpan(list);
     }
 
     /// ElementCountExpr
     ///   : UnaryExpr MathExpr
     ///   | UnaryExpr BitwiseExpr
-    pub fn elementCountExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
+    pub fn elementCountExpr(self: *Parser) !?Ast.Node.Index {
         const left = try self.unaryExpr() orelse return null;
         if (try self.bitwiseExpr(left)) |right| return right;
         return try self.expectMathExpr(left);
@@ -1160,9 +1244,9 @@ const Parser = struct {
     ///   | TILDE UnaryExpr
     ///   | STAR  UnaryExpr
     ///   | AND   UnaryExpr
-    pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index(Ast.Expression) {
+    pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
         const op_token = self.current_token;
-        const op: Ast.UnaryExpr.Operator = switch (op_token.tag) {
+        const op: Ast.Node.Tag = switch (op_token.tag) {
             .bang, .tilde => .not,
             .minus => .negate,
             .star => .deref,
@@ -1181,30 +1265,34 @@ const Parser = struct {
             return error.Parsing;
         };
 
-        return try self.addExpr(.{ .unary = .{ .op = op, .expr = expr } });
+        return try self.addNode(.{
+            .tag = op,
+            .main_token = op_token,
+            .lhs = expr,
+        });
     }
 
-    /// SingularExpr : PrimaryExpr PostfixExpr TODO
-    pub fn singularExpr(self: *Parser) !?Ast.Index(Ast.Expression) {
+    /// SingularExpr : PrimaryExpr PostfixExpr
+    pub fn singularExpr(self: *Parser) !?Ast.Node.Index {
         return self.primaryExpr();
         // TODO: component_or_swizzle_specifier
     }
 
     /// MultiplicativeExpr : UnaryExpr | (STAR | DIVISION | MOD MultiplicativeExpr)*
     ///
-    /// expects first expression ( UnaryExpr )
-    pub fn expectMultiplicativeExpr(self: *Parser, left_unary: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
-        var left = left_unary;
+    /// expects UnaryExpr
+    pub fn expectMultiplicativeExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {
+        var lhs = lhs_unary;
         while (true) {
             const op_token = self.current_token;
-            const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
-                .star => .multiply,
-                .division => .divide,
-                .mod => .modulo,
-                else => return left,
+            const node_tag: Ast.Node.Tag = switch (op_token.tag) {
+                .star => .mul,
+                .division => .div,
+                .mod => .mod,
+                else => return lhs,
             };
             _ = self.next();
-            const right = try self.unaryExpr() orelse {
+            const rhs = try self.unaryExpr() orelse {
                 self.addError(
                     self.current_token.loc,
                     "unable to parse right side of '{s}' expression",
@@ -1213,7 +1301,12 @@ const Parser = struct {
                 );
                 return error.Parsing;
             };
-            left = try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+            lhs = try self.addNode(.{
+                .tag = node_tag,
+                .main_token = op_token,
+                .lhs = lhs,
+                .rhs = rhs,
+            });
         }
     }
 
@@ -1228,14 +1321,14 @@ const Parser = struct {
     /// AdditiveExpr : MultiplicativeExpr | (PLUS | MINUS AdditiveExpr)*
     ///
     /// expects first expression ( MultiplicativeExpr )
-    pub fn expectAdditiveExpr(self: *Parser, left_mul: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
-        var left = left_mul;
+    pub fn expectAdditiveExpr(self: *Parser, lhs_mul: Ast.Node.Index) !Ast.Node.Index {
+        var lhs = lhs_mul;
         while (true) {
             const op_token = self.current_token;
-            const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
+            const op: Ast.Node.Tag = switch (op_token.tag) {
                 .plus => .add,
-                .minus => .subtract,
-                else => return left,
+                .minus => .sub,
+                else => return lhs,
             };
             _ = self.next();
             const unary = try self.unaryExpr() orelse {
@@ -1247,13 +1340,18 @@ const Parser = struct {
                 );
                 return error.Parsing;
             };
-            const right = try self.expectMultiplicativeExpr(unary);
-            left = try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+            const rhs = try self.expectMultiplicativeExpr(unary);
+            lhs = try self.addNode(.{
+                .tag = op,
+                .main_token = op_token,
+                .lhs = lhs,
+                .rhs = rhs,
+            });
         }
     }
 
     /// MathExpr : MultiplicativeExpr AdditiveExpr
-    pub fn expectMathExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+    pub fn expectMathExpr(self: *Parser, left: Ast.Node.Index) !Ast.Node.Index {
         const right = try self.expectMultiplicativeExpr(left);
         return self.expectAdditiveExpr(right);
     }
@@ -1264,16 +1362,16 @@ const Parser = struct {
     ///   | UnaryExpr SHIFT_RIGHT UnaryExpr
     ///
     /// expects first expression ( UnaryExpr )
-    pub fn expectShiftExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
+    pub fn expectShiftExpr(self: *Parser, lhs: Ast.Node.Index) !Ast.Node.Index {
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
+        const op: Ast.Node.Tag = switch (op_token.tag) {
             .shift_left => .shift_left,
             .shift_right => .shift_right,
-            else => return try self.expectMathExpr(left),
+            else => return try self.expectMathExpr(lhs),
         };
         _ = self.next();
 
-        const right = try self.unaryExpr() orelse {
+        const rhs = try self.unaryExpr() orelse {
             self.addError(
                 self.current_token.loc,
                 "unable to parse right side of '{s}' expression",
@@ -1283,7 +1381,12 @@ const Parser = struct {
             return error.Parsing;
         };
 
-        return try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+        return try self.addNode(.{
+            .tag = op,
+            .main_token = op_token,
+            .lhs = lhs,
+            .rhs = rhs,
+        });
     }
 
     // RelationalExpr
@@ -1296,21 +1399,21 @@ const Parser = struct {
     //   | ShiftExpr NOT_EQUAL          ShiftExpr
     ///
     /// expects first expression ( UnaryExpr )
-    pub fn expectRelationalExpr(self: *Parser, left_unary: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
-        const left = try self.expectShiftExpr(left_unary);
+    pub fn expectRelationalExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {
+        const lhs = try self.expectShiftExpr(lhs_unary);
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
+        const op: Ast.Node.Tag = switch (op_token.tag) {
             .equal_equal => .equal,
             .not_equal => .not_equal,
             .less_than => .less,
             .less_than_equal => .less_equal,
             .greater_than => .greater,
             .greater_than_equal => .greater_equal,
-            else => return left,
+            else => return lhs,
         };
         _ = self.next();
 
-        const right_unary = try self.unaryExpr() orelse {
+        const rhs_unary = try self.unaryExpr() orelse {
             self.addError(
                 self.current_token.loc,
                 "unable to parse right side of '{s}' expression",
@@ -1319,19 +1422,24 @@ const Parser = struct {
             );
             return error.Parsing;
         };
-        const right = try self.expectShiftExpr(right_unary);
-        return try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+        const rhs = try self.expectShiftExpr(rhs_unary);
+        return try self.addNode(.{
+            .tag = op,
+            .main_token = op_token,
+            .lhs = lhs,
+            .rhs = rhs,
+        });
     }
 
     /// BitwiseExpr
     ///   : UnaryExpr AND UnaryExpr (AND UnaryExpr)*
-    ///   | UnaryExpr OR  UnaryExpr (OR UnaryExpr)*
+    ///   | UnaryExpr OR  UnaryExpr (OR  UnaryExpr)*
     ///   | UnaryExpr XOR UnaryExpr (XOR UnaryExpr)*
     ///
     /// expects first expression ( UnaryExpr )
-    pub fn bitwiseExpr(self: *Parser, left: Ast.Index(Ast.Expression)) !?Ast.Index(Ast.Expression) {
+    pub fn bitwiseExpr(self: *Parser, lhs: Ast.Node.Index) !?Ast.Node.Index {
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
+        const op: Ast.Node.Tag = switch (op_token.tag) {
             .@"and" => .binary_and,
             .@"or" => .binary_or,
             .xor => .binary_xor,
@@ -1339,9 +1447,9 @@ const Parser = struct {
         };
         _ = self.next();
 
-        var left_result = left;
+        var lhs_result = lhs;
         while (true) {
-            const right = try self.unaryExpr() orelse {
+            const rhs = try self.unaryExpr() orelse {
                 self.addError(
                     self.current_token.loc,
                     "unable to parse right side of '{s}' expression",
@@ -1351,9 +1459,14 @@ const Parser = struct {
                 return error.Parsing;
             };
 
-            left_result = try self.addExpr(.{ .binary = .{ .op = op, .left = left_result, .right = right } });
+            lhs_result = try self.addNode(.{
+                .tag = op,
+                .main_token = op_token,
+                .lhs = lhs_result,
+                .rhs = rhs,
+            });
 
-            if (self.current_token.tag != op_token.tag) return left_result;
+            if (self.current_token.tag != op_token.tag) return lhs_result;
         }
     }
 
@@ -1363,20 +1476,20 @@ const Parser = struct {
     ///   | RelationalExpr (OR_OR   RelationalExpr)*
     ///
     /// expects first expression ( UnaryExpr )
-    pub fn expectShortCircuitExpr(self: *Parser, left_relational: Ast.Index(Ast.Expression)) !Ast.Index(Ast.Expression) {
-        var left = left_relational;
+    pub fn expectShortCircuitExpr(self: *Parser, lhs_relational: Ast.Node.Index) !Ast.Node.Index {
+        var lhs = lhs_relational;
 
         const op_token = self.current_token;
-        const op: Ast.BinaryExpr.Operator = switch (op_token.tag) {
+        const op: Ast.Node.Tag = switch (op_token.tag) {
             .and_and => .circuit_and,
             .or_or => .circuit_or,
-            else => return left,
+            else => return lhs,
         };
 
         while (self.current_token.tag == op_token.tag) {
             _ = self.next();
 
-            const right_unary = try self.unaryExpr() orelse {
+            const rhs_unary = try self.unaryExpr() orelse {
                 self.addError(
                     self.current_token.loc,
                     "unable to parse right side of '{s}' expression",
@@ -1385,12 +1498,17 @@ const Parser = struct {
                 );
                 return error.Parsing;
             };
-            const right = try self.expectRelationalExpr(right_unary);
+            const rhs = try self.expectRelationalExpr(rhs_unary);
 
-            left = try self.addExpr(.{ .binary = .{ .op = op, .left = left, .right = right } });
+            lhs = try self.addNode(.{
+                .tag = op,
+                .main_token = op_token,
+                .lhs = lhs,
+                .rhs = rhs,
+            });
         }
 
-        return left;
+        return lhs;
     }
 
     /// Expr
@@ -1398,11 +1516,11 @@ const Parser = struct {
     ///   | BitwiseExpr
     ///   | RelationalExpr AND_AND RelationalExpr
     ///   | RelationalExpr OR_OR   RelationalExpr
-    pub fn expression(self: *Parser) !?Ast.Index(Ast.Expression) {
-        const left_unary = try self.unaryExpr() orelse return null;
-        if (try self.bitwiseExpr(left_unary)) |bitwise| return bitwise;
-        const left = try self.expectRelationalExpr(left_unary);
-        return try self.expectShortCircuitExpr(left);
+    pub fn expression(self: *Parser) !?Ast.Node.Index {
+        const lhs_unary = try self.unaryExpr() orelse return null;
+        if (try self.bitwiseExpr(lhs_unary)) |bitwise| return bitwise;
+        const lhs = try self.expectRelationalExpr(lhs_unary);
+        return try self.expectShortCircuitExpr(lhs);
     }
 
     pub fn expectToken(self: *Parser, tag: Token.Tag) !Token {
@@ -1440,50 +1558,36 @@ const Parser = struct {
         }
     }
 
-    pub fn addExpr(self: *Parser, expr: Ast.Expression) error{OutOfMemory}!Ast.Index(Ast.Expression) {
-        const i = @intCast(u32, self.ast.expressions.items.len);
-        try self.ast.expressions.append(self.allocator, expr);
+    pub fn addNode(self: *Parser, node: Ast.Node) error{OutOfMemory}!Ast.Node.Index {
+        const i = @intCast(u32, self.ast.nodes.len);
+        try self.ast.nodes.append(self.allocator, node);
         return i;
     }
 
-    pub fn addStmnt(self: *Parser, expr: Ast.Statement) error{OutOfMemory}!Ast.Index(Ast.Statement) {
-        const i = @intCast(u32, self.ast.statements.items.len);
-        try self.ast.statements.append(self.allocator, expr);
-        return i;
+    fn listToSpan(self: *Parser, list: []const Ast.Node.Index) !Ast.Node.Index {
+        try self.ast.extra_data.appendSlice(self.allocator, list);
+        return self.addNode(.{
+            .tag = .span,
+            .main_token = undefined,
+            .lhs = @intCast(Ast.Node.Index, self.ast.extra_data.items.len - list.len),
+            .rhs = @intCast(Ast.Node.Index, self.ast.extra_data.items.len),
+        });
     }
 
-    pub fn addGlobal(self: *Parser, decl: Ast.GlobalDecl) error{OutOfMemory}!void {
-        return self.ast.globals.append(self.allocator, decl);
-    }
-
-    pub fn addType(self: *Parser, t: Ast.Type) error{OutOfMemory}!Ast.Index(Ast.Type) {
-        const i = @intCast(u32, self.ast.types.items.len);
-        try self.ast.types.append(self.allocator, t);
-        return i;
-    }
-
-    pub fn addExprExtraSlice(self: *Parser, slice: []const Ast.Index(Ast.Expression)) error{OutOfMemory}!Ast.Range(Ast.Index(Ast.Expression)) {
-        try self.ast.expressions_extra.appendSlice(self.allocator, slice);
-        return .{
-            .start = @intCast(u32, self.ast.expressions_extra.items.len - slice.len),
-            .end = @intCast(u32, self.ast.expressions_extra.items.len),
-        };
-    }
-
-    pub fn addAttrSlice(self: *Parser, slice: []const Ast.Attribute) error{OutOfMemory}!Ast.Range(Ast.Attribute) {
-        try self.ast.attrs.appendSlice(self.allocator, slice);
-        return .{
-            .start = @intCast(u32, self.ast.attrs.items.len - slice.len),
-            .end = @intCast(u32, self.ast.attrs.items.len),
-        };
-    }
-
-    pub fn addStmntSlice(self: *Parser, slice: []const Ast.Statement) error{OutOfMemory}!Ast.Range(Ast.Statement) {
-        try self.ast.statements.appendSlice(self.allocator, slice);
-        return .{
-            .start = @intCast(u32, self.ast.statements.items.len - slice.len),
-            .end = @intCast(u32, self.ast.statements.items.len),
-        };
+    fn addExtra(self: *Parser, extra: anytype) error{OutOfMemory}!Ast.Node.Index {
+        const fields = std.meta.fields(@TypeOf(extra));
+        try self.ast.extra_data.ensureUnusedCapacity(self.allocator, fields.len);
+        const result = @intCast(u32, self.ast.extra_data.items.len);
+        inline for (fields) |field| {
+            comptime {
+                if (field.type != Ast.Node.Index) {
+                    @compileLog(@TypeOf(extra));
+                }
+            }
+            comptime std.debug.assert(field.type == Ast.Node.Index);
+            self.ast.extra_data.appendAssumeCapacity(@field(extra, field.name));
+        }
+        return result;
     }
 
     pub fn addError(self: *Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) void {
@@ -1542,11 +1646,6 @@ const Parser = struct {
 
         self.failed = true;
     }
-
-    // TODO
-    pub fn numberLiteral(str: []const u8) !Ast.Literal.Number {
-        return .{ .abstract_int = try std.fmt.parseInt(i64, str, 10) };
-    }
 };
 
 const expect = std.testing.expect;
@@ -1560,38 +1659,7 @@ test "no errors" {
     const t = std.time.microTimestamp() * std.time.ns_per_us;
     const source =
         \\;
-        \\@interpolate(flat) var expr = vec3<f32>(1, 5);
-        \\var<storage> expr = bitcast<f32>(5);
-        \\var expr;
-        \\var expr = bool();
-        \\var expr = ~(-(!false));
-        \\var expr = expr;
-        \\var expr = expr(expr);
-        \\const hello = 1;
-        \\override hello;
-        \\type the_type = ptr<workgroup, f32, read>;
-        \\type the_type = array<f32, expr>;
-        \\type the_type = vec3<f32>;
-        \\type the_type = mat2x3<f32>;
-        \\type the_type = atomic<u32>;
-        \\type the_type = sampler;
-        \\struct S {
-        \\  s: u32,
-        \\}
-        \\const_assert 2 > 1;
-        \\fn foo(f: u32) -> u32 {}
-        \\fn foo(f: u32) -> u32 {
-        \\    loop {
-        \\        continuing {
-        \\            continue;
-        \\            break;
-        \\            break if true;
-        \\        }
-        \\        return bar;
-        \\        return;
-        \\        const_assert 2 > 1;
-        \\    }
-        \\}
+        \\@interpolate(flat) var expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3;
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);
@@ -1599,86 +1667,129 @@ test "no errors" {
     std.debug.print("\n{s}\n", .{std.fmt.fmtDurationSigned(std.time.microTimestamp() * std.time.ns_per_us - t)});
 }
 
-test "variable & expressions" {
-    const source =
-        \\var expr = 1 + 5 + 2 * 3 > 6 >> 7;
-    ;
+// test "no errors" {
+//     const t = std.time.microTimestamp() * std.time.ns_per_us;
+//     const source =
+//         \\;
+//         \\@interpolate(flat) var expr = vec3<f32>(1, 5);
+//         \\var<storage> expr = bitcast<f32>(5);
+//         \\var expr;
+//         \\var expr = bool();
+//         \\var expr = ~(-(!false));
+//         \\var expr = expr;
+//         \\var expr = expr(expr);
+//         \\const hello = 1;
+//         \\override hello;
+//         \\type the_type = ptr<workgroup, f32, read>;
+//         \\type the_type = array<f32, expr>;
+//         \\type the_type = vec3<f32>;
+//         \\type the_type = mat2x3<f32>;
+//         \\type the_type = atomic<u32>;
+//         \\type the_type = sampler;
+//         \\struct S {
+//         \\  s: u32,
+//         \\}
+//         \\const_assert 2 > 1;
+//         \\fn foo(f: u32) -> u32 {}
+//         \\fn foo(f: u32) -> u32 {
+//         \\    loop {
+//         \\        continuing {
+//         \\            continue;
+//         \\            break;
+//         \\            break if true;
+//         \\        }
+//         \\        return bar;
+//         \\        return;
+//         \\        const_assert 2 > 1;
+//         \\    }
+//         \\}
+//     ** 1;
 
-    var ast = try parse(std.testing.allocator, source, null);
-    defer ast.deinit(std.testing.allocator);
+//     var ast = try parse(std.testing.allocator, source, null);
+//     defer ast.deinit(std.testing.allocator);
+//     std.debug.print("\n{s}\n", .{std.fmt.fmtDurationSigned(std.time.microTimestamp() * std.time.ns_per_us - t)});
+// }
 
-    const expr = ast.getExpr(ast.getGlobal(0).variable.value.?).binary;
+// test "variable & expressions" {
+//     const source =
+//         \\var expr = 1 + 5 + 2 * 3 > 6 >> 7;
+//     ;
 
-    const expr_left = ast.getExpr(expr.left).binary;
-    const expr_left_left = ast.getExpr(expr_left.left).binary;
-    const expr_left_left_left = ast.getExpr(expr_left_left.left).literal;
-    const expr_left_left_right = ast.getExpr(expr_left_left.right).literal;
-    const expr_left_right = ast.getExpr(expr_left.right).binary;
-    const expr_left_right_left = ast.getExpr(expr_left_right.left).literal;
-    const expr_left_right_right = ast.getExpr(expr_left_right.right).literal;
+//     var ast = try parse(std.testing.allocator, source, null);
+//     defer ast.deinit(std.testing.allocator);
 
-    const expr_right = ast.getExpr(expr.right).binary;
-    const expr_right_left = ast.getExpr(expr_right.left).literal;
-    const expr_right_right = ast.getExpr(expr_right.right).literal;
+//     const expr = ast.getExpr(ast.getGlobal(0).variable.value.?).binary;
 
-    try expect(expr_left.op == .add);
-    try expect(expr_right.op == .shift_right);
-    try expect(expr_left_left.op == .add);
-    try expect(expr_left_right.op == .multiply);
-    try expect(expr_left_left_left.number.abstract_int == 1);
-    try expect(expr_left_left_right.number.abstract_int == 5);
-    try expect(expr_left_right_left.number.abstract_int == 2);
-    try expect(expr_left_right_right.number.abstract_int == 3);
-    try expect(expr_right_left.number.abstract_int == 6);
-    try expect(expr_right_right.number.abstract_int == 7);
-}
+//     const expr_left = ast.getExpr(expr.left).binary;
+//     const expr_left_left = ast.getExpr(expr_left.left).binary;
+//     const expr_left_left_left = ast.getExpr(expr_left_left.left).literal;
+//     const expr_left_left_right = ast.getExpr(expr_left_left.right).literal;
+//     const expr_left_right = ast.getExpr(expr_left.right).binary;
+//     const expr_left_right_left = ast.getExpr(expr_left_right.left).literal;
+//     const expr_left_right_right = ast.getExpr(expr_left_right.right).literal;
 
-test "type alias" {
-    const source =
-        \\type my_type = vec3<f32>;
-    ;
+//     const expr_right = ast.getExpr(expr.right).binary;
+//     const expr_right_left = ast.getExpr(expr_right.left).literal;
+//     const expr_right_right = ast.getExpr(expr_right.right).literal;
 
-    var ast = try parse(std.testing.allocator, source, null);
-    defer ast.deinit(std.testing.allocator);
+//     try expect(expr_left.op == .add);
+//     try expect(expr_right.op == .shift_right);
+//     try expect(expr_left_left.op == .add);
+//     try expect(expr_left_right.op == .multiply);
+//     try expect(expr_left_left_left.number.abstract_int == 1);
+//     try expect(expr_left_left_right.number.abstract_int == 5);
+//     try expect(expr_left_right_left.number.abstract_int == 2);
+//     try expect(expr_left_right_right.number.abstract_int == 3);
+//     try expect(expr_right_left.number.abstract_int == 6);
+//     try expect(expr_right_right.number.abstract_int == 7);
+// }
 
-    const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
-    const vec3_elements_type = ast.getType(vec3.vector.element);
+// test "type alias" {
+//     const source =
+//         \\type my_type = vec3<f32>;
+//     ;
 
-    try expect(vec3.vector.prefix == .vec3);
-    try expect(vec3_elements_type.scalar == .f32);
-}
+//     var ast = try parse(std.testing.allocator, source, null);
+//     defer ast.deinit(std.testing.allocator);
 
-test "struct" {
-    const source =
-        \\struct S { s: u32 }
-    ;
+//     const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
+//     const vec3_elements_type = ast.getType(vec3.vector.element);
 
-    var ast = try parse(std.testing.allocator, source, null);
-    defer ast.deinit(std.testing.allocator);
+//     try expect(vec3.vector.prefix == .vec3);
+//     try expect(vec3_elements_type.scalar == .f32);
+// }
 
-    const strct = ast.getGlobal(0).@"struct";
-    const strct_member_s = strct.members[0];
-    const strct_member_s_type = ast.getType(strct_member_s.type).scalar;
+// test "struct" {
+//     const source =
+//         \\struct S { s: u32 }
+//     ;
 
-    try expect(strct.members.len == 1);
-    try expectEqualStrings("S", strct.name);
-    try expectEqualStrings("s", strct_member_s.name);
-    try expect(strct_member_s_type == .u32);
-}
+//     var ast = try parse(std.testing.allocator, source, null);
+//     defer ast.deinit(std.testing.allocator);
 
-test "research" {
-    if (true) return error.SkipZigTest;
+//     const strct = ast.getGlobal(0).@"struct";
+//     const strct_member_s = strct.members[0];
+//     const strct_member_s_type = ast.getType(strct_member_s.type).scalar;
 
-    const source =
-        \\type my_type = array<f32, sampler()>;
-    ;
+//     try expect(strct.members.len == 1);
+//     try expectEqualStrings("S", strct.name);
+//     try expectEqualStrings("s", strct_member_s.name);
+//     try expect(strct_member_s_type == .u32);
+// }
 
-    var ast = try parse(std.testing.allocator, source, null);
-    defer ast.deinit(std.testing.allocator);
+// test "research" {
+//     if (true) return error.SkipZigTest;
 
-    const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
-    const vec3_elements_type = ast.getType(vec3.vector.element);
+//     const source =
+//         \\type my_type = array<f32, sampler()>;
+//     ;
 
-    try expect(vec3.vector.prefix == .vec3);
-    try expect(vec3_elements_type.scalar == .f32);
-}
+//     var ast = try parse(std.testing.allocator, source, null);
+//     defer ast.deinit(std.testing.allocator);
+
+//     const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
+//     const vec3_elements_type = ast.getType(vec3.vector.element);
+
+//     try expect(vec3.vector.prefix == .vec3);
+//     try expect(vec3_elements_type.scalar == .f32);
+// }

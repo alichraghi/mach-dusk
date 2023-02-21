@@ -400,7 +400,7 @@ test "tokenize identifier and numbers" {
 
 test "tokenize other" {
     comptime var str: [:0]const u8 = "";
-    inline for (std.meta.fields(Token.Tag)) |field, i| comptime {
+    inline for (std.meta.fields(Token.Tag), 0..) |field, i| comptime {
         if (i > 3) {
             str = str ++ " " ++ (Token.Tag.symbol(@intToEnum(Token.Tag, field.value)));
         }

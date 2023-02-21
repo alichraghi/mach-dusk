@@ -5,6 +5,7 @@ const Tokenizer = @import("Tokenizer.zig");
 
 const max_call_args = 64;
 
+/// parses a TranslationUnit(WGSL Program)
 pub fn parse(
     allocator: std.mem.Allocator,
     source: [:0]const u8,
@@ -22,39 +23,33 @@ pub fn parse(
     var parser = Parser{
         .allocator = allocator,
         .source = source,
-        .tokens = try tokens.toOwnedSlice(),
+        .ast = .{ .tokens = try tokens.toOwnedSlice() },
         .tok_i = 0,
         .error_file = error_file orelse std.io.getStdErr(),
     };
-    errdefer allocator.free(parser.tokens);
-    try parser.parseRoot();
-    parser.ast.tokens = parser.tokens;
+    errdefer parser.ast.deinit(allocator);
+    const estimated_nodes = (parser.ast.tokens.len + 2) / 2;
+    try parser.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
+
+    while (parser.currentToken().tag != .eof) {
+        parser.globalDecl() catch |err| {
+            if (err == error.Parsing) {
+                parser.continueUntilOrEOF(.semicolon);
+                continue;
+            } else return err;
+        };
+    }
+
     return parser.ast;
 }
 
 const Parser = struct {
     allocator: std.mem.Allocator,
     source: [:0]const u8,
-    tokens: []const Token,
+    ast: Ast,
     tok_i: u32,
     error_file: std.fs.File,
     failed: bool = false,
-    ast: Ast = .{},
-
-    pub fn parseRoot(self: *Parser) !void {
-        errdefer self.ast.deinit(self.allocator);
-        const estimated_nodes = (self.tokens.len + 2) / 2;
-        try self.ast.nodes.ensureTotalCapacity(self.allocator, estimated_nodes);
-
-        while (self.tokens[self.tok_i].tag != .eof) {
-            self.globalDecl() catch |err| {
-                if (err == error.Parsing) {
-                    self.continueUntilOrEOF(.semicolon);
-                    continue;
-                } else return err;
-            };
-        }
-    }
 
     /// GlobalDecl
     ///   : SEMICOLON
@@ -89,9 +84,9 @@ const Parser = struct {
         } else {
             if (attrs != null) {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "expected global declaration, found '{s}'",
-                    .{self.tokens[self.tok_i].tag.symbol()},
+                    .{self.currentToken().tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -131,7 +126,7 @@ const Parser = struct {
     pub fn attribute(self: *Parser) !?Ast.Node.Index {
         const attr_token = self.eatToken(.attr) orelse return null;
         const ident_tok = try self.expectToken(.ident);
-        const str = self.tokens[ident_tok].loc.asStr(self.source);
+        const str = self.tokenAt(ident_tok).loc.asStr(self.source);
         if (std.mem.eql(u8, "invariant", str)) {
             return try self.addNode(.{ .tag = .attr_invariant, .main_token = attr_token });
         } else if (std.mem.eql(u8, "const", str)) {
@@ -145,7 +140,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "align", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected align expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected align expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -154,7 +149,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "binding", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected binding expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected binding expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -163,7 +158,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "group", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected group expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected group expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -172,7 +167,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "id", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected id expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected id expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -181,7 +176,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "location", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected location expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected location expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -190,7 +185,7 @@ const Parser = struct {
         } else if (std.mem.eql(u8, "size", str)) {
             _ = try self.expectToken(.paren_left);
             const expr = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected size expression", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected size expression", .{}, &.{});
                 return error.Parsing;
             };
             _ = self.eatToken(.comma);
@@ -206,21 +201,21 @@ const Parser = struct {
             _ = try self.expectToken(.paren_left);
 
             const expr_x = try self.expression() orelse {
-                self.addError(self.tokens[self.tok_i].loc, "expected workgroup_size x parameter", .{}, &.{});
+                self.addError(self.currentToken().loc, "expected workgroup_size x parameter", .{}, &.{});
                 return error.Parsing;
             };
 
             if (self.eatToken(.comma)) |_| {
-                if (self.tokens[self.tok_i].tag != .paren_right) {
+                if (self.currentToken().tag != .paren_right) {
                     const expr_y = try self.expression() orelse {
-                        self.addError(self.tokens[self.tok_i].loc, "expected workgroup_size y parameter", .{}, &.{});
+                        self.addError(self.currentToken().loc, "expected workgroup_size y parameter", .{}, &.{});
                         return error.Parsing;
                     };
 
                     if (self.eatToken(.comma)) |_| {
-                        if (self.tokens[self.tok_i].tag != .paren_right) {
+                        if (self.currentToken().tag != .paren_right) {
                             const expr_z = try self.expression() orelse {
-                                self.addError(self.tokens[self.tok_i].loc, "expected workgroup_size z parameter", .{}, &.{});
+                                self.addError(self.currentToken().loc, "expected workgroup_size z parameter", .{}, &.{});
                                 return error.Parsing;
                             };
 
@@ -261,7 +256,7 @@ const Parser = struct {
             const inter_type = try self.expectInterpolationType();
 
             if (self.eatToken(.comma)) |_| {
-                if (self.tokens[self.tok_i].tag != .paren_right) {
+                if (self.currentToken().tag != .paren_right) {
                     const inter_sample = try self.expectInterpolationSample();
 
                     _ = self.eatToken(.comma);
@@ -283,7 +278,7 @@ const Parser = struct {
             });
         } else {
             self.addError(
-                self.tokens[ident_tok].loc,
+                self.tokenAt(ident_tok).loc,
                 "invalid attribute name",
                 .{},
                 &.{
@@ -312,8 +307,8 @@ const Parser = struct {
     ///   | 'sample_mask'
     pub fn expectBuiltinValue(self: *Parser) !Ast.TokenIndex {
         const token = self.next();
-        if (self.tokens[token].tag == .ident) {
-            const str = self.tokens[token].loc.asStr(self.source);
+        if (self.tokenAt(token).tag == .ident) {
+            const str = self.tokenAt(token).loc.asStr(self.source);
             if (std.mem.eql(u8, "vertex_index", str) or
                 std.mem.eql(u8, "instance_index", str) or
                 std.mem.eql(u8, "position", str) or
@@ -332,9 +327,9 @@ const Parser = struct {
         }
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected builtin value name, found '{s}'",
-            .{self.tokens[token].tag.symbol()},
+            .{self.tokenAt(token).tag.symbol()},
             &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"},
         );
         return error.Parsing;
@@ -346,8 +341,8 @@ const Parser = struct {
     ///   | 'flat'
     pub fn expectInterpolationType(self: *Parser) !Ast.TokenIndex {
         const token = self.next();
-        if (self.tokens[token].tag == .ident) {
-            const str = self.tokens[token].loc.asStr(self.source);
+        if (self.tokenAt(token).tag == .ident) {
+            const str = self.tokenAt(token).loc.asStr(self.source);
             if (std.mem.eql(u8, "perspective", str) or
                 std.mem.eql(u8, "linear", str) or
                 std.mem.eql(u8, "flat", str))
@@ -357,9 +352,9 @@ const Parser = struct {
         }
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected interpolation type name, found '{s}'",
-            .{self.tokens[token].tag.symbol()},
+            .{self.tokenAt(token).tag.symbol()},
             &.{"possible values are 'perspective', 'linear' and 'flat'"},
         );
         return error.Parsing;
@@ -371,8 +366,8 @@ const Parser = struct {
     ///   | 'sample'
     pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
         const token = self.next();
-        if (self.tokens[token].tag == .ident) {
-            const str = self.tokens[token].loc.asStr(self.source);
+        if (self.tokenAt(token).tag == .ident) {
+            const str = self.tokenAt(token).loc.asStr(self.source);
             if (std.mem.eql(u8, "center", str) or
                 std.mem.eql(u8, "centroid", str) or
                 std.mem.eql(u8, "sample", str))
@@ -382,9 +377,9 @@ const Parser = struct {
         }
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected interpolation sample name, found '{s}'",
-            .{self.tokens[token].tag.symbol()},
+            .{self.tokenAt(token).tag.symbol()},
             &.{"possible values are 'center', 'centroid' and 'sample'"},
         );
         return error.Parsing;
@@ -414,9 +409,9 @@ const Parser = struct {
         const initializer = if (self.eatToken(.equal)) |_|
             try self.expression() orelse {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "expected initializer expression, found '{s}'",
-                    .{self.tokens[self.tok_i].tag.symbol()},
+                    .{self.currentToken().tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -445,9 +440,9 @@ const Parser = struct {
     //     _ = try self.expectToken(.equal);
     //     const expr = try self.expression() orelse {
     //         self.addError(
-    //             self.tokens[self.tok_i].loc,
+    //             self.currentToken().loc,
     //             "expected initializer expression, found '{s}'",
-    //             .{self.tokens[self.tok_i].tag.symbol()},
+    //             .{self.currentToken().tag.symbol()},
     //             &.{},
     //         );
     //         return error.Parsing;
@@ -467,9 +462,9 @@ const Parser = struct {
     //     const expr = if (self.eatToken(.equal)) |_|
     //         try self.expression() orelse {
     //             self.addError(
-    //                 self.tokens[self.tok_i].loc,
+    //                 self.currentToken().loc,
     //                 "expected initializer expression, found '{s}'",
-    //                 .{self.tokens[self.tok_i].tag.symbol()},
+    //                 .{self.currentToken().tag.symbol()},
     //                 &.{},
     //             );
     //             return error.Parsing;
@@ -499,9 +494,9 @@ const Parser = struct {
     //         const member = try self.structMember(attrs) orelse {
     //             if (attrs != null) {
     //                 self.addError(
-    //                     self.tokens[self.tok_i].loc,
+    //                     self.currentToken().loc,
     //                     "expected struct member, found '{s}'",
-    //                     .{self.tokens[self.tok_i].tag.symbol()},
+    //                     .{self.currentToken().tag.symbol()},
     //                     &.{},
     //                 );
     //                 return error.Parsing;
@@ -536,9 +531,9 @@ const Parser = struct {
     //     _ = self.eatToken(.keyword_const_assert) orelse return null;
     //     return try self.expression() orelse {
     //         self.addError(
-    //             self.tokens[self.tok_i].loc,
+    //             self.currentToken().loc,
     //             "expected expression, found '{s}'",
-    //             .{self.tokens[self.tok_i].tag.symbol()},
+    //             .{self.currentToken().tag.symbol()},
     //             &.{},
     //         );
     //         return error.Parsing;
@@ -563,9 +558,9 @@ const Parser = struct {
 
     //     const body = try self.block() orelse {
     //         self.addError(
-    //             self.tokens[self.tok_i].loc,
+    //             self.currentToken().loc,
     //             "expected function body, found '{s}'",
-    //             .{self.tokens[self.tok_i].tag.symbol()},
+    //             .{self.currentToken().tag.symbol()},
     //             &.{},
     //         );
     //         return error.Parsing;
@@ -671,7 +666,7 @@ const Parser = struct {
 
     // /// BreakIfStatement : BREAK IF Expr
     // pub fn breakIfStatement(self: *Parser) !?Ast.Node.Index(Ast.Expression) {
-    //     if (self.tokens[self.tok_i].tag == .keyword_break and self.peek().tag == .keyword_if) {
+    //     if (self.currentToken().tag == .keyword_break and self.peek().tag == .keyword_if) {
     //         _ = self.next();
     //         _ = self.next();
     //         return self.expression();
@@ -698,18 +693,18 @@ const Parser = struct {
     //     while (true) {
     //         const cond = self.expression() orelse {
     //             self.addError(
-    //                 self.tokens[self.tok_i].loc,
+    //                 self.currentToken().loc,
     //                 "expected condition expression, found '{s}'",
-    //                 .{self.tokens[self.tok_i].tag.symbol()},
+    //                 .{self.currentToken().tag.symbol()},
     //                 &.{},
     //             );
     //             return error.Parsing;
     //         };
     //         const payload = try self.block() orelse {
     //             self.addError(
-    //                 self.tokens[self.tok_i].loc,
+    //                 self.currentToken().loc,
     //                 "expected payload block, found '{s}'",
-    //                 .{self.tokens[self.tok_i].tag.symbol()},
+    //                 .{self.currentToken().tag.symbol()},
     //                 &.{},
     //             );
     //             return error.Parsing;
@@ -736,7 +731,7 @@ const Parser = struct {
     //     errdefer params.deinit();
 
     //     while (true) {
-    //         const param_token = self.tokens[self.tok_i];
+    //         const param_token = self.currentToken();
     //         const param = try self.parameter() orelse break;
     //         if (params.items.len > max_call_args) {
     //             self.addError(
@@ -772,7 +767,7 @@ const Parser = struct {
 
     // /// TypeAliasDecl : TYPE IDENT EQUAL TypeSpecifier
     // pub fn typeAliasDecl(self: *Parser) !?Ast.TypeAlias {
-    //     if (self.tokens[self.tok_i].tag != .keyword_type) return null;
+    //     if (self.currentToken().tag != .keyword_type) return null;
     //     _ = self.next();
 
     //     const name = try self.expectToken(.ident);
@@ -788,7 +783,7 @@ const Parser = struct {
     // ///   | LET   OptionalType EQUAL Expr
     // ///   | CONST OptionalType EQUAL Expr
     // pub fn varStatement(self: *Parser) !Ast.Variable {
-    //     switch (self.tokens[self.tok_i].tag) {
+    //     switch (self.currentToken().tag) {
     //         .keyword_let, .keyword_const => {
     //             _ = self.next();
 
@@ -797,9 +792,9 @@ const Parser = struct {
     //             // const value = self.expression() catch |err| {
     //             //     if (err == error.Parsing) {
     //             //         self.addError(
-    //             //             self.tokens[self.tok_i].loc,
+    //             //             self.currentToken().loc,
     //             //             "expected initializer expression, found '{s}'",
-    //             //             .{self.tokens[self.tok_i].tag.symbol()},
+    //             //             .{self.currentToken().tag.symbol()},
     //             //             &.{},
     //             //         );
     //             //     }
@@ -827,9 +822,9 @@ const Parser = struct {
     pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
         return try self.typeSpecifier() orelse {
             self.addError(
-                self.tokens[self.tok_i].loc,
+                self.currentToken().loc,
                 "expected type sepecifier, found '{s}'",
-                .{self.tokens[self.tok_i].tag.symbol()},
+                .{self.currentToken().tag.symbol()},
                 &.{},
             );
             return error.Parsing;
@@ -838,7 +833,7 @@ const Parser = struct {
 
     /// TypeSpecifier : IDENTIFIER | TypeSpecifierWithoutIdent
     pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
-        if (self.tokens[self.tok_i].tag == .ident) {
+        if (self.currentToken().tag == .ident) {
             _ = self.next();
             return try self.addNode(.{
                 .tag = .user_type,
@@ -884,7 +879,7 @@ const Parser = struct {
         }
 
         const token = self.tok_i;
-        switch (self.tokens[token].tag) {
+        switch (self.tokenAt(token).tag) {
             .keyword_i32,
             .keyword_u32,
             .keyword_f32,
@@ -920,7 +915,7 @@ const Parser = struct {
                 _ = try self.expectToken(.less_than);
                 const elem_type = try self.expectTypeSpecifier();
                 if (self.eatToken(.comma)) |_| {
-                    const expr_token = self.tokens[self.tok_i];
+                    const expr_token = self.currentToken();
                     const size = try self.elementCountExpr() orelse {
                         self.addError(
                             expr_token.loc,
@@ -978,7 +973,7 @@ const Parser = struct {
     ///   | 'vec3'
     ///   | 'vec4'
     pub fn vectorPrefix(self: *Parser) ?Ast.TokenIndex {
-        switch (self.tokens[self.tok_i].tag) {
+        switch (self.currentToken().tag) {
             .keyword_vec2,
             .keyword_vec3,
             .keyword_vec4,
@@ -1001,7 +996,7 @@ const Parser = struct {
     ///   | 'mat4x3'
     ///   | 'mat4x4'
     pub fn matrixPrefix(self: *Parser) ?Ast.TokenIndex {
-        switch (self.tokens[self.tok_i].tag) {
+        switch (self.currentToken().tag) {
             .keyword_mat2x2,
             .keyword_mat2x3,
             .keyword_mat2x4,
@@ -1027,8 +1022,8 @@ const Parser = struct {
     ///   | 'storage'
     pub fn expectAddressSpace(self: *Parser) !Ast.Node.Index {
         const token = self.tok_i;
-        if (self.tokens[token].tag == .ident) {
-            const str = self.tokens[token].loc.asStr(self.source);
+        if (self.tokenAt(token).tag == .ident) {
+            const str = self.tokenAt(token).loc.asStr(self.source);
             if (std.mem.eql(u8, "function", str) or
                 std.mem.eql(u8, "private", str) or
                 std.mem.eql(u8, "workgroup", str) or
@@ -1044,9 +1039,9 @@ const Parser = struct {
         }
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected address space, found '{s}'",
-            .{self.tokens[token].tag.symbol()},
+            .{self.tokenAt(token).tag.symbol()},
             &.{"must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'"},
         );
         return error.Parsing;
@@ -1055,8 +1050,8 @@ const Parser = struct {
     /// AccessMode : 'read' | 'write' | 'read_write'
     pub fn expectAccessMode(self: *Parser) !Ast.Node.Index {
         const token = self.tok_i;
-        if (self.tokens[token].tag == .ident) {
-            const str = self.tokens[token].loc.asStr(self.source);
+        if (self.tokenAt(token).tag == .ident) {
+            const str = self.tokenAt(token).loc.asStr(self.source);
             if (std.mem.eql(u8, "read", str) or
                 std.mem.eql(u8, "write", str) or
                 std.mem.eql(u8, "read_write", str))
@@ -1070,9 +1065,9 @@ const Parser = struct {
         }
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected access mode, found '{s}'",
-            .{self.tokens[token].tag.symbol()},
+            .{self.tokenAt(token).tag.symbol()},
             &.{"must be one of 'read', 'write', 'read_write'"},
         );
         return error.Parsing;
@@ -1090,7 +1085,7 @@ const Parser = struct {
         }
 
         const token = self.tok_i;
-        switch (self.tokens[token].tag) {
+        switch (self.tokenAt(token).tag) {
             .keyword_true, .keyword_false => {
                 _ = self.next();
                 return try self.addNode(.{ .tag = .bool_literal, .main_token = token });
@@ -1115,14 +1110,6 @@ const Parser = struct {
             .paren_left => return try self.expectParenExpr(),
             .ident => {
                 _ = self.next();
-                if (self.tokens[self.tok_i].tag == .paren_left) {
-                    const args = try self.expectArgumentExprList();
-                    return try self.addNode(.{
-                        .tag = .ident_expr,
-                        .main_token = token,
-                        .lhs = args,
-                    });
-                }
                 return try self.addNode(.{ .tag = .ident_expr, .main_token = token });
             },
             else => return null,
@@ -1134,9 +1121,9 @@ const Parser = struct {
         _ = try self.expectToken(.paren_left);
         const expr = try self.expression() orelse {
             self.addError(
-                self.tokens[self.tok_i].loc,
+                self.currentToken().loc,
                 "unable to parse expression '{s}'",
-                .{self.tokens[self.tok_i].tag.symbol()},
+                .{self.currentToken().tag.symbol()},
                 &.{},
             );
             return error.Parsing;
@@ -1152,6 +1139,19 @@ const Parser = struct {
     ///   |   VectorPrefix )
     ///   ArgumentExprList
     pub fn callExpr(self: *Parser) !?Ast.Node.Index {
+        if (self.currentToken().tag == .ident) {
+            if (self.peek().tag == .paren_left) {
+                const ident_token = self.next();
+                const args = try self.expectArgumentExprList();
+                return try self.addNode(.{
+                    .tag = .call_expr,
+                    .main_token = ident_token,
+                    .lhs = args,
+                });
+            }
+            return null;
+        }
+
         if (self.peek().tag != .less_than) {
             if (self.vectorPrefix()) |vec| {
                 const args = try self.expectArgumentExprList();
@@ -1161,7 +1161,7 @@ const Parser = struct {
                 const args = try self.expectArgumentExprList();
                 return try self.addNode(.{ .tag = .call_expr, .main_token = mat, .rhs = args });
             }
-            if (self.tokens[self.tok_i].tag == .keyword_array) {
+            if (self.currentToken().tag == .keyword_array) {
                 const arr_token = self.next();
                 const args = try self.expectArgumentExprList();
                 return try self.addNode(.{ .tag = .call_expr, .main_token = arr_token, .rhs = args });
@@ -1185,9 +1185,9 @@ const Parser = struct {
             }),
             else => {
                 self.addError(
-                    self.tokens[constructor_main_token].loc,
+                    self.tokenAt(constructor_main_token).loc,
                     "type '{s}' can't be called (not expression)",
-                    .{self.tokens[constructor_main_token].tag.symbol()},
+                    .{self.tokenAt(constructor_main_token).tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1202,7 +1202,7 @@ const Parser = struct {
         const scratch_top = self.ast.scratch.items.len;
         defer self.ast.scratch.shrinkRetainingCapacity(scratch_top);
         while (true) {
-            const expr_token = self.tokens[self.tok_i];
+            const expr_token = self.currentToken();
             const expr = try self.expression() orelse break;
             self.ast.scratch.append(self.allocator, expr) catch {
                 self.addError(
@@ -1241,7 +1241,7 @@ const Parser = struct {
     ///   | AND   UnaryExpr
     pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
         const op_token = self.tok_i;
-        const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+        const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
             .bang, .tilde => .not,
             .minus => .negate,
             .star => .deref,
@@ -1252,9 +1252,9 @@ const Parser = struct {
 
         const expr = try self.unaryExpr() orelse {
             self.addError(
-                self.tokens[self.tok_i].loc,
+                self.currentToken().loc,
                 "unable to parse right side of '{s}' expression",
-                .{self.tokens[op_token].tag.symbol()},
+                .{self.tokenAt(op_token).tag.symbol()},
                 &.{},
             );
             return error.Parsing;
@@ -1280,7 +1280,7 @@ const Parser = struct {
         var lhs = lhs_unary;
         while (true) {
             const op_token = self.tok_i;
-            const node_tag: Ast.Node.Tag = switch (self.tokens[self.tok_i].tag) {
+            const node_tag: Ast.Node.Tag = switch (self.currentToken().tag) {
                 .star => .mul,
                 .division => .div,
                 .mod => .mod,
@@ -1289,9 +1289,9 @@ const Parser = struct {
             _ = self.next();
             const rhs = try self.unaryExpr() orelse {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "unable to parse right side of '{s}' expression",
-                    .{self.tokens[self.tok_i].tag.symbol()},
+                    .{self.currentToken().tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1320,7 +1320,7 @@ const Parser = struct {
         var lhs = lhs_mul;
         while (true) {
             const op_token = self.tok_i;
-            const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+            const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
                 .plus => .add,
                 .minus => .sub,
                 else => return lhs,
@@ -1328,9 +1328,9 @@ const Parser = struct {
             _ = self.next();
             const unary = try self.unaryExpr() orelse {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "unable to parse right side of '{s}' expression",
-                    .{self.tokens[op_token].tag.symbol()},
+                    .{self.tokenAt(op_token).tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1359,7 +1359,7 @@ const Parser = struct {
     /// expects first expression ( UnaryExpr )
     pub fn expectShiftExpr(self: *Parser, lhs: Ast.Node.Index) !Ast.Node.Index {
         const op_token = self.tok_i;
-        const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+        const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
             .shift_left => .shift_left,
             .shift_right => .shift_right,
             else => return try self.expectMathExpr(lhs),
@@ -1368,9 +1368,9 @@ const Parser = struct {
 
         const rhs = try self.unaryExpr() orelse {
             self.addError(
-                self.tokens[self.tok_i].loc,
+                self.currentToken().loc,
                 "unable to parse right side of '{s}' expression",
-                .{self.tokens[op_token].tag.symbol()},
+                .{self.tokenAt(op_token).tag.symbol()},
                 &.{},
             );
             return error.Parsing;
@@ -1397,7 +1397,7 @@ const Parser = struct {
     pub fn expectRelationalExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {
         const lhs = try self.expectShiftExpr(lhs_unary);
         const op_token = self.tok_i;
-        const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+        const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
             .equal_equal => .equal,
             .not_equal => .not_equal,
             .less_than => .less,
@@ -1410,9 +1410,9 @@ const Parser = struct {
 
         const rhs_unary = try self.unaryExpr() orelse {
             self.addError(
-                self.tokens[self.tok_i].loc,
+                self.currentToken().loc,
                 "unable to parse right side of '{s}' expression",
-                .{self.tokens[op_token].tag.symbol()},
+                .{self.tokenAt(op_token).tag.symbol()},
                 &.{},
             );
             return error.Parsing;
@@ -1434,7 +1434,7 @@ const Parser = struct {
     /// expects first expression ( UnaryExpr )
     pub fn bitwiseExpr(self: *Parser, lhs: Ast.Node.Index) !?Ast.Node.Index {
         const op_token = self.tok_i;
-        const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+        const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
             .@"and" => .binary_and,
             .@"or" => .binary_or,
             .xor => .binary_xor,
@@ -1446,9 +1446,9 @@ const Parser = struct {
         while (true) {
             const rhs = try self.unaryExpr() orelse {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "unable to parse right side of '{s}' expression",
-                    .{self.tokens[op_token].tag.symbol()},
+                    .{self.tokenAt(op_token).tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1461,7 +1461,7 @@ const Parser = struct {
                 .rhs = rhs,
             });
 
-            if (self.tokens[self.tok_i].tag != self.tokens[op_token].tag) return lhs_result;
+            if (self.currentToken().tag != self.tokenAt(op_token).tag) return lhs_result;
         }
     }
 
@@ -1475,20 +1475,20 @@ const Parser = struct {
         var lhs = lhs_relational;
 
         const op_token = self.tok_i;
-        const op: Ast.Node.Tag = switch (self.tokens[op_token].tag) {
+        const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
             .and_and => .circuit_and,
             .or_or => .circuit_or,
             else => return lhs,
         };
 
-        while (self.tokens[self.tok_i].tag == self.tokens[op_token].tag) {
+        while (self.currentToken().tag == self.tokenAt(op_token).tag) {
             _ = self.next();
 
             const rhs_unary = try self.unaryExpr() orelse {
                 self.addError(
-                    self.tokens[self.tok_i].loc,
+                    self.currentToken().loc,
                     "unable to parse right side of '{s}' expression",
-                    .{self.tokens[op_token].tag.symbol()},
+                    .{self.tokenAt(op_token).tag.symbol()},
                     &.{},
                 );
                 return error.Parsing;
@@ -1520,34 +1520,42 @@ const Parser = struct {
 
     pub fn expectToken(self: *Parser, tag: Token.Tag) !Ast.TokenIndex {
         const token = self.next();
-        if (self.tokens[token].tag == tag) return token;
+        if (self.tokenAt(token).tag == tag) return token;
 
         self.addError(
-            self.tokens[token].loc,
+            self.tokenAt(token).loc,
             "expected '{s}', but found '{s}'",
-            .{ tag.symbol(), self.tokens[token].tag.symbol() },
+            .{ tag.symbol(), self.tokenAt(token).tag.symbol() },
             &.{},
         );
         return error.Parsing;
     }
 
     pub fn eatToken(self: *Parser, tag: Token.Tag) ?Ast.TokenIndex {
-        return if (self.tokens[self.tok_i].tag == tag) self.next() else null;
+        return if (self.currentToken().tag == tag) self.next() else null;
     }
 
     pub fn peek(self: *Parser) Token {
-        return self.tokens[std.math.min(self.tok_i + 1, self.tokens.len)];
+        return self.tokenAt(std.math.min(self.tok_i + 1, self.ast.tokens.len));
+    }
+
+    pub fn tokenAt(self: *Parser, i: Ast.TokenIndex) Token {
+        return self.ast.tokens[std.math.min(i, self.ast.tokens.len)];
+    }
+
+    pub fn currentToken(self: *Parser) Token {
+        return self.tokenAt(self.tok_i);
     }
 
     pub fn next(self: *Parser) Ast.TokenIndex {
         const current = self.tok_i;
-        self.tok_i = std.math.min(self.tok_i + 1, self.tokens.len);
+        self.tok_i = std.math.min(self.tok_i + 1, self.ast.tokens.len);
         return current;
     }
 
     pub fn continueUntilOrEOF(self: *Parser, until: Token.Tag) void {
         while (true) {
-            const tag = self.tokens[self.next()].tag;
+            const tag = self.tokenAt(self.next()).tag;
             if (tag == until or tag == .eof) break;
         }
     }

@@ -26,14 +26,14 @@ pub const Loc = struct {
             .line_end = @intCast(u32, source.len),
         };
 
-        for (source[0..self.start]) |c, i| {
+        for (source[0..self.start], 0..) |c, i| {
             if (c == '\n') {
                 result.line += 1;
                 result.line_start = @intCast(u32, i) + 1;
             }
         }
 
-        for (source[self.end..]) |c, i| {
+        for (source[self.end..], 0..) |c, i| {
             if (c == '\n') {
                 result.line_end = self.end + @intCast(u32, i);
                 break;

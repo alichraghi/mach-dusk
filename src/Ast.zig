@@ -6,7 +6,7 @@ const Ast = @This();
 nodes: std.MultiArrayList(Node) = .{},
 extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
 scratch: std.ArrayListUnmanaged(Node.Index) = .{},
-tokens: []const Token = &.{},
+tokens: []const Token,
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.nodes.deinit(allocator);
@@ -36,7 +36,7 @@ pub const Node = struct {
         span,
         /// main_token is 'var'.
         /// lhs is a VarDecl.
-        /// rhs is initializer, if any.
+        /// rhs is initializer (Optional)
         global_variable,
         /// main_token is AddressSpace.
         addr_space,
@@ -61,7 +61,7 @@ pub const Node = struct {
         /// array<lhs, rhs>
         /// main_token is 'array'.
         /// lhs is element type.
-        /// rhs is array size, if any.
+        /// rhs is array size (Optional)
         array_type,
         /// ptr<rhs.addr_space, lhs, rhs.access_mode>
         /// main_token is 'ptr'.
@@ -88,15 +88,15 @@ pub const Node = struct {
         attr_location,
         attr_size,
         /// @builtin(lhs)
-        /// lhs is BuiltinValue
+        /// lhs is BuiltinValue (TokenIndex)
         attr_builtin,
         /// @workgroup(lhs, rhs.y, rhs.z)
         /// lhs is Expr.
         /// rhs is Workgroup if any.
         attr_workgroup,
         /// @workgroup(lhs, rhs)
-        /// lhs is InterpolationType
-        /// rhs is InterpolationSample, if any.
+        /// lhs is InterpolationType (TokenIndex)
+        /// rhs is InterpolationSample (TokenIndex) (Optional)
         attr_interpolate,
 
         variable_qualifier,
@@ -147,6 +147,9 @@ pub const Node = struct {
         /// lhs >= rhs
         greater_equal,
 
+        /// main_token is 'array', ScalarType, VectorPrefix or MatrixPrefix.
+        /// lhs is element type (Optional)
+        /// rhs is ArgumentExprList
         call_expr,
         bitcast_expr,
         ident_expr,

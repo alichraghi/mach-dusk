@@ -7,5 +7,5 @@ test {
     std.testing.refAllDeclsRecursive(Token);
     std.testing.refAllDeclsRecursive(Tokenizer);
     std.testing.refAllDeclsRecursive(Ast);
-    std.testing.refAllDeclsRecursive(@import("parser.zig"));
+    std.testing.refAllDeclsRecursive(@import("Parser.zig"));
 }

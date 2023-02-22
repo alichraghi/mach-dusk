@@ -91,7 +91,7 @@ pub const Node = struct {
         // ********* Global declarations *********
         /// main_token is 'var'.
         /// lhs is a VarDecl.
-        /// rhs is initializer (Optional)
+        /// rhs is initializer [Optional]
         global_variable,
 
         // ********* Types *********
@@ -114,7 +114,7 @@ pub const Node = struct {
         /// array<lhs, rhs>
         /// main_token is 'array'.
         /// lhs is element type.
-        /// rhs is array size (Optional)
+        /// rhs is array size [Optional]
         array_type,
         /// ptr<rhs.addr_space, lhs, rhs.access_mode>
         /// main_token is 'ptr'.
@@ -127,44 +127,19 @@ pub const Node = struct {
 
         // ********* Attributes *********
         // main_token is '@'
-        /// @invariant
-        attr_invariant,
         /// @const
-        attr_const,
-        /// @vertex
-        attr_vertex,
-        /// @fragment
-        attr_fragment,
-        /// @compute
-        attr_compute,
+        attr,
         /// @align(lhs)
         /// lhs is Expr
-        attr_align,
-        /// @binding(lhs)
+        /// for @builtin, lhs is a TokenIndex
+        attr_one_arg,
+        /// @workgroup_size(lhs, rhs.y, rhs.z)
         /// lhs is Expr
-        attr_binding,
-        /// @group(lhs)
-        /// lhs is Expr
-        attr_group,
-        /// @id(lhs)
-        /// lhs is Expr
-        attr_id,
-        /// @location(lhs)
-        /// lhs is Expr
-        attr_location,
-        /// @size(lhs)
-        /// lhs is Expr
-        attr_size,
-        /// @builtin(lhs)
-        /// lhs is BuiltinValue (TokenIndex)
-        attr_builtin,
-        /// @workgroup(lhs, rhs.y, rhs.z)
-        /// lhs is Expr.
-        /// rhs is Workgroup if any.
-        attr_workgroup,
+        /// rhs is WorkgroupSize [Optional]
+        attr_workgroup_size,
         /// @workgroup(lhs, rhs)
-        /// lhs is InterpolationType (TokenIndex)
-        /// rhs is InterpolationSample (TokenIndex) (Optional)
+        /// lhs is InterpolationType   [TokenIndex]
+        /// rhs is InterpolationSample [TokenIndex] [Optional]
         attr_interpolate,
 
         // ********* Operators *********
@@ -217,7 +192,7 @@ pub const Node = struct {
         // ********* Expressions *********
         /// vec2<f32>(2)
         /// main_token is identifier, 'array', ScalarType, VectorPrefix or MatrixPrefix.
-        /// lhs is constructor type (Optional)
+        /// lhs is constructor type [Optional]
         /// rhs is ArgumentExprList
         call_expr,
         /// bitcast<f32>(5)
@@ -248,7 +223,7 @@ pub const Node = struct {
         type: Index = null_node,
     };
 
-    pub const Workgroup = struct {
+    pub const WorkgroupSize = struct {
         y: Index,
         z: Index = null_node,
     };

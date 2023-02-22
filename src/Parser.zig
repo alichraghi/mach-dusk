@@ -66,6 +66,23 @@ pub fn attributeList(self: *Parser) !?Ast.Node.Index {
     return try self.listToSpan(list);
 }
 
+const attribute_list = std.ComptimeStringMap(Ast.Node.Tag, .{
+    .{ "invariant", .attr },
+    .{ "const", .attr },
+    .{ "vertex", .attr },
+    .{ "fragment", .attr },
+    .{ "compute", .attr },
+    .{ "align", .attr_one_arg },
+    .{ "binding", .attr_one_arg },
+    .{ "group", .attr_one_arg },
+    .{ "id", .attr_one_arg },
+    .{ "location", .attr_one_arg },
+    .{ "size", .attr_one_arg },
+    .{ "builtin", .attr_one_arg },
+    .{ "workgroup_size", .attr_workgroup_size },
+    .{ "interpolate", .attr_interpolate },
+});
+
 /// Attribute :
 /// ATTR 'invariant'
 /// ATTR 'const'
@@ -78,163 +95,14 @@ pub fn attributeList(self: *Parser) !?Ast.Node.Index {
 /// ATTR 'id'             PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
 /// ATTR 'location'       PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
 /// ATTR 'size'           PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'workgroup_size' PAREN_LEFT Expr              (COMMA Expr)?  (COMMA Expr)? COMMA? PAREN_RIGHT
 /// ATTR 'builtin'        PAREN_LEFT BuiltinValue                                   COMMA? PAREN_RIGHT
+/// ATTR 'workgroup_size' PAREN_LEFT Expr              (COMMA Expr)?  (COMMA Expr)? COMMA? PAREN_RIGHT
 /// ATTR 'interpolate'    PAREN_LEFT InterpolationType (COMMA InterpolationSample)? COMMA? PAREN_RIGHT
 pub fn attribute(self: *Parser) !?Ast.Node.Index {
     const attr_token = self.eatToken(.attr) orelse return null;
     const ident_tok = try self.expectToken(.ident);
     const str = self.tokenAt(ident_tok).loc.asStr(self.source);
-    if (std.mem.eql(u8, "invariant", str)) {
-        return try self.addNode(.{ .tag = .attr_invariant, .main_token = attr_token });
-    } else if (std.mem.eql(u8, "const", str)) {
-        return try self.addNode(.{ .tag = .attr_const, .main_token = attr_token });
-    } else if (std.mem.eql(u8, "vertex", str)) {
-        return try self.addNode(.{ .tag = .attr_vertex, .main_token = attr_token });
-    } else if (std.mem.eql(u8, "fragment", str)) {
-        return try self.addNode(.{ .tag = .attr_fragment, .main_token = attr_token });
-    } else if (std.mem.eql(u8, "compute", str)) {
-        return try self.addNode(.{ .tag = .attr_compute, .main_token = attr_token });
-    } else if (std.mem.eql(u8, "align", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected align expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_align, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "binding", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected binding expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_binding, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "group", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected group expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_group, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "id", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected id expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_id, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "location", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected location expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_location, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "size", str)) {
-        _ = try self.expectToken(.paren_left);
-        const expr = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected size expression", .{}, &.{});
-            return error.Parsing;
-        };
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_size, .main_token = attr_token, .lhs = expr });
-    } else if (std.mem.eql(u8, "builtin", str)) {
-        _ = try self.expectToken(.paren_left);
-        const value = try self.expectBuiltinValue();
-        _ = self.eatToken(.comma);
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{ .tag = .attr_builtin, .main_token = attr_token, .lhs = value });
-    } else if (std.mem.eql(u8, "workgroup_size", str)) {
-        _ = try self.expectToken(.paren_left);
-
-        const expr_x = try self.expression() orelse {
-            self.addError(self.currentToken().loc, "expected workgroup_size x parameter", .{}, &.{});
-            return error.Parsing;
-        };
-
-        if (self.eatToken(.comma)) |_| {
-            if (self.currentToken().tag != .paren_right) {
-                const expr_y = try self.expression() orelse {
-                    self.addError(self.currentToken().loc, "expected workgroup_size y parameter", .{}, &.{});
-                    return error.Parsing;
-                };
-
-                if (self.eatToken(.comma)) |_| {
-                    if (self.currentToken().tag != .paren_right) {
-                        const expr_z = try self.expression() orelse {
-                            self.addError(self.currentToken().loc, "expected workgroup_size z parameter", .{}, &.{});
-                            return error.Parsing;
-                        };
-
-                        _ = self.eatToken(.comma);
-                        _ = try self.expectToken(.paren_right);
-                        const extra = try self.addExtra(Ast.Node.Workgroup{
-                            .y = expr_y,
-                            .z = expr_z,
-                        });
-                        return try self.addNode(.{
-                            .tag = .attr_workgroup,
-                            .main_token = attr_token,
-                            .lhs = expr_x,
-                            .rhs = extra,
-                        });
-                    }
-                }
-
-                _ = try self.expectToken(.paren_right);
-                const extra = try self.addExtra(Ast.Node.Workgroup{ .y = expr_y });
-                return try self.addNode(.{
-                    .tag = .attr_workgroup,
-                    .main_token = attr_token,
-                    .lhs = expr_x,
-                    .rhs = extra,
-                });
-            }
-        }
-
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{
-            .tag = .attr_workgroup,
-            .main_token = attr_token,
-            .lhs = expr_x,
-        });
-    } else if (std.mem.eql(u8, "interpolate", str)) {
-        _ = try self.expectToken(.paren_left);
-        const inter_type = try self.expectInterpolationType();
-
-        if (self.eatToken(.comma)) |_| {
-            if (self.currentToken().tag != .paren_right) {
-                const inter_sample = try self.expectInterpolationSample();
-
-                _ = self.eatToken(.comma);
-                _ = try self.expectToken(.paren_right);
-                return try self.addNode(.{
-                    .tag = .attr_interpolate,
-                    .main_token = attr_token,
-                    .lhs = inter_type,
-                    .rhs = inter_sample,
-                });
-            }
-        }
-
-        _ = try self.expectToken(.paren_right);
-        return try self.addNode(.{
-            .tag = .attr_interpolate,
-            .main_token = attr_token,
-            .lhs = inter_type,
-        });
-    } else {
+    const tag = attribute_list.get(str) orelse {
         self.addError(
             self.tokenAt(ident_tok).loc,
             "invalid attribute name",
@@ -247,7 +115,78 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
             },
         );
         return error.Parsing;
+    };
+    var node = Ast.Node{
+        .tag = tag,
+        .main_token = attr_token,
+    };
+    switch (tag) {
+        .attr => {},
+        .attr_one_arg => {
+            _ = try self.expectToken(.paren_left);
+            if (std.mem.eql(u8, "builtin", str)) {
+                node.lhs = try self.expectBuiltinValue();
+            } else {
+                node.lhs = try self.expression() orelse {
+                    self.addError(
+                        self.currentToken().loc,
+                        "expected expression, but found '{s}'",
+                        .{self.currentToken().tag.symbol()},
+                        &.{},
+                    );
+                    return error.Parsing;
+                };
+            }
+            _ = self.eatToken(.comma);
+            _ = try self.expectToken(.paren_right);
+        },
+        .attr_workgroup_size => {
+            _ = try self.expectToken(.paren_left);
+
+            node.lhs = try self.expression() orelse {
+                self.addError(self.currentToken().loc, "expected workgroup_size x parameter", .{}, &.{});
+                return error.Parsing;
+            };
+
+            if (self.eatToken(.comma) != null and self.currentToken().tag != .paren_right) {
+                var workgroup_size = Ast.Node.WorkgroupSize{
+                    .y = try self.expression() orelse {
+                        self.addError(self.currentToken().loc, "expected workgroup_size y parameter", .{}, &.{});
+                        return error.Parsing;
+                    },
+                };
+
+                if (self.eatToken(.comma) != null and self.currentToken().tag != .paren_right) {
+                    workgroup_size.z = try self.expression() orelse {
+                        self.addError(self.currentToken().loc, "expected workgroup_size z parameter", .{}, &.{});
+                        return error.Parsing;
+                    };
+
+                    _ = self.eatToken(.comma);
+                }
+
+                const extra = try self.addExtra(workgroup_size);
+                node.rhs = extra;
+            }
+
+            _ = try self.expectToken(.paren_right);
+        },
+        .attr_interpolate => {
+            _ = try self.expectToken(.paren_left);
+            node.lhs = try self.expectInterpolationType();
+
+            if (self.eatToken(.comma) != null and self.currentToken().tag != .paren_right) {
+                node.rhs = try self.expectInterpolationSample();
+                _ = self.eatToken(.comma);
+                _ = try self.expectToken(.paren_right);
+            }
+
+            _ = try self.expectToken(.paren_right);
+        },
+        else => unreachable,
     }
+
+    return try self.addNode(node);
 }
 
 /// BuiltinValue

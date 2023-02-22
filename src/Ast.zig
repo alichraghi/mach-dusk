@@ -33,6 +33,7 @@ pub fn parse(
         .error_file = error_file orelse std.io.getStdErr(),
     };
     errdefer parser.ast.deinit(allocator);
+
     const estimated_nodes = (parser.ast.tokens.len + 2) / 2;
     try parser.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
 
@@ -69,11 +70,6 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     allocator.free(self.tokens);
 }
 
-pub const Range = struct {
-    start: u32,
-    end: u32,
-};
-
 pub const TokenIndex = u32;
 
 pub const Node = struct {
@@ -86,19 +82,19 @@ pub const Node = struct {
     pub const null_node: Index = 0;
 
     pub const Tag = enum {
+        /// a helper node pointing at extra_data[lhs..rhs].
+        span,
+
         /// root node pointing at extra_data[lhs..rhs].
         translation_unit,
 
-        /// a helper node pointing at extra_data[lhs..rhs].
-        span,
+        // ********* Global declarations *********
         /// main_token is 'var'.
         /// lhs is a VarDecl.
         /// rhs is initializer (Optional)
         global_variable,
-        /// main_token is AddressSpace.
-        addr_space,
-        /// main_token is AccessMode.
-        access_mode,
+
+        // ********* Types *********
         /// main_token is ScalarType.
         scalar_type,
         /// main_token is SamplerType.
@@ -131,18 +127,33 @@ pub const Node = struct {
 
         // ********* Attributes *********
         // main_token is '@'
+        /// @invariant
         attr_invariant,
+        /// @const
         attr_const,
+        /// @vertex
         attr_vertex,
+        /// @fragment
         attr_fragment,
+        /// @compute
         attr_compute,
-        // @attr(lhs)
-        // lhs is Expr
+        /// @align(lhs)
+        /// lhs is Expr
         attr_align,
+        /// @binding(lhs)
+        /// lhs is Expr
         attr_binding,
+        /// @group(lhs)
+        /// lhs is Expr
         attr_group,
+        /// @id(lhs)
+        /// lhs is Expr
         attr_id,
+        /// @location(lhs)
+        /// lhs is Expr
         attr_location,
+        /// @size(lhs)
+        /// lhs is Expr
         attr_size,
         /// @builtin(lhs)
         /// lhs is BuiltinValue (TokenIndex)
@@ -156,8 +167,7 @@ pub const Node = struct {
         /// rhs is InterpolationSample (TokenIndex) (Optional)
         attr_interpolate,
 
-        variable_qualifier,
-
+        // ********* Operators *********
         // main_token is operator
         /// lhs * rhs
         mul,
@@ -204,26 +214,37 @@ pub const Node = struct {
         /// lhs >= rhs
         greater_equal,
 
-        /// main_token is 'array', ScalarType, VectorPrefix or MatrixPrefix.
-        /// lhs is element type (Optional)
+        // ********* Expressions *********
+        /// vec2<f32>(2)
+        /// main_token is identifier, 'array', ScalarType, VectorPrefix or MatrixPrefix.
+        /// lhs is constructor type (Optional)
         /// rhs is ArgumentExprList
         call_expr,
+        /// bitcast<f32>(5)
+        /// main_token is 'bitcast'
+        /// lhs is destination type
+        /// rhs is Expr
         bitcast_expr,
+        /// some_ident
+        /// main_token is identifier
         ident_expr,
 
+        // ********* Literals *********
+        /// main_token is 'true' or 'false'
         bool_literal,
+        /// main_token is a number litreal
         number_literal,
     };
 
     pub const PtrType = struct {
-        addr_space: Index,
-        access_mode: Index = null_node,
+        addr_space: TokenIndex,
+        access_mode: TokenIndex = null_node,
     };
 
     pub const VarDecl = struct {
         attrs: Index = null_node,
-        addr_space: Index = null_node,
-        access_mode: Index = null_node,
+        addr_space: TokenIndex = null_node,
+        access_mode: TokenIndex = null_node,
         type: Index = null_node,
     };
 

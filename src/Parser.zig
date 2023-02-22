@@ -978,7 +978,7 @@ pub fn matrixPrefix(self: *Parser) ?Ast.TokenIndex {
 ///   | 'workgroup'
 ///   | 'uniform'
 ///   | 'storage'
-pub fn expectAddressSpace(self: *Parser) !Ast.Node.Index {
+pub fn expectAddressSpace(self: *Parser) !Ast.TokenIndex {
     const token = self.tok_i;
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
@@ -989,10 +989,7 @@ pub fn expectAddressSpace(self: *Parser) !Ast.Node.Index {
             std.mem.eql(u8, "storage", str))
         {
             _ = self.next();
-            return self.addNode(.{
-                .tag = .addr_space,
-                .main_token = token,
-            });
+            return token;
         }
     }
 
@@ -1006,7 +1003,7 @@ pub fn expectAddressSpace(self: *Parser) !Ast.Node.Index {
 }
 
 /// AccessMode : 'read' | 'write' | 'read_write'
-pub fn expectAccessMode(self: *Parser) !Ast.Node.Index {
+pub fn expectAccessMode(self: *Parser) !Ast.TokenIndex {
     const token = self.tok_i;
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
@@ -1015,10 +1012,7 @@ pub fn expectAccessMode(self: *Parser) !Ast.Node.Index {
             std.mem.eql(u8, "read_write", str))
         {
             _ = self.next();
-            return self.addNode(.{
-                .tag = .access_mode,
-                .main_token = token,
-            });
+            return token;
         }
     }
 
@@ -1104,7 +1098,7 @@ pub fn callExpr(self: *Parser) !?Ast.Node.Index {
             return try self.addNode(.{
                 .tag = .call_expr,
                 .main_token = ident_token,
-                .lhs = args,
+                .rhs = args,
             });
         }
         return null;
@@ -1510,7 +1504,7 @@ pub fn continueUntilOrEOF(self: *Parser, until: Token.Tag) void {
 }
 
 pub fn addNode(self: *Parser, node: Ast.Node) error{OutOfMemory}!Ast.Node.Index {
-    const i = @intCast(u32, self.ast.nodes.len);
+    const i = @intCast(Ast.Node.Index, self.ast.nodes.len);
     try self.ast.nodes.append(self.allocator, node);
     return i;
 }
@@ -1528,9 +1522,9 @@ fn listToSpan(self: *Parser, list: []const Ast.Node.Index) !Ast.Node.Index {
 fn addExtra(self: *Parser, extra: anytype) error{OutOfMemory}!Ast.Node.Index {
     const fields = std.meta.fields(@TypeOf(extra));
     try self.ast.extra_data.ensureUnusedCapacity(self.allocator, fields.len);
-    const result = @intCast(u32, self.ast.extra_data.items.len);
+    const result = @intCast(Ast.Node.Index, self.ast.extra_data.items.len);
     inline for (fields) |field| {
-        comptime std.debug.assert(field.type == Ast.Node.Index);
+        comptime std.debug.assert(field.type == Ast.Node.Index or field.type == Ast.TokenIndex);
         self.ast.extra_data.appendAssumeCapacity(@field(extra, field.name));
     }
     return result;

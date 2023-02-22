@@ -1495,17 +1495,24 @@ pub fn addError(self: *Parser, loc: Token.Loc, comptime err_fmt: []const u8, fmt
     term.setColor(b, .Dim) catch unreachable;
     b.print("{d} │ ", .{loc_extra.line}) catch unreachable;
     term.setColor(b, .Reset) catch unreachable;
-    b.writeAll(self.source[loc_extra.line_start..loc_extra.line_end]) catch unreachable;
+    b.writeAll(self.source[loc_extra.line_start..loc.start]) catch unreachable;
+    term.setColor(b, .Green) catch unreachable;
+    b.writeAll(self.source[loc.start..loc.end]) catch unreachable;
+    term.setColor(b, .Reset) catch unreachable;
+    b.writeAll(self.source[loc.end..loc_extra.line_end]) catch unreachable;
     b.writeByte('\n') catch unreachable;
 
-    // error location pointer ('^')
+    // error location pointer
+    const line_number_length = (std.math.log10(loc_extra.line) + 1) + 3;
     b.writeByteNTimes(
         ' ',
-        (std.math.log10(loc_extra.line) + 1) + (3) + (loc_extra.col - 1),
+        line_number_length + (loc_extra.col - 1),
     ) catch unreachable;
     term.setColor(b, .Bold) catch unreachable;
     term.setColor(b, .Green) catch unreachable;
-    b.writeAll("^\n") catch unreachable;
+    b.writeByte('^') catch unreachable;
+    b.writeByteNTimes('~', loc.end - loc.start - 1) catch unreachable;
+    b.writeByte('\n') catch unreachable;
 
     // notes
     for (notes) |note| {

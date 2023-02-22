@@ -237,7 +237,6 @@ test Parser {
 }
 
 test "no errors" {
-    const t = std.time.microTimestamp() * std.time.ns_per_us;
     const source =
         \\;
         \\@interpolate(flat) var expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3 & 6;
@@ -245,7 +244,6 @@ test "no errors" {
 
     var ast = try parse(std.testing.allocator, source, null);
     defer ast.deinit(std.testing.allocator);
-    std.debug.print("\n{s}\n", .{std.fmt.fmtDurationSigned(std.time.microTimestamp() * std.time.ns_per_us - t)});
 }
 
 // test "no errors" {

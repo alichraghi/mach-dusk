@@ -347,14 +347,14 @@ pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
 pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     const var_token = self.eatToken(.keyword_var) orelse return null;
 
-    var addr_space = Ast.Node.null_node;
-    var access_mode = Ast.Node.null_node;
+    var addr_space = Ast.null_node;
+    var access_mode = Ast.null_node;
     if (self.eatToken(.less_than)) |_| {
         addr_space = try self.expectAddressSpace();
         access_mode = if (self.eatToken(.comma)) |_|
             try self.expectAccessMode()
         else
-            Ast.Node.null_node;
+            Ast.null_node;
         _ = try self.expectToken(.greater_than);
     }
 
@@ -362,7 +362,7 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     const var_type = if (self.eatToken(.colon)) |_|
         try self.expectTypeSpecifier()
     else
-        Ast.Node.null_node;
+        Ast.null_node;
 
     const initializer = if (self.eatToken(.equal)) |_|
         try self.expression() orelse {
@@ -375,10 +375,10 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
             return error.Parsing;
         }
     else
-        Ast.Node.null_node;
+        Ast.null_node;
 
     const extra = try self.addExtra(.{
-        .attrs = attrs orelse Ast.Node.null_node,
+        .attrs = attrs orelse Ast.null_node,
         .addr_space = addr_space,
         .access_mode = access_mode,
         .type = var_type,
@@ -908,7 +908,7 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             const access_mode = if (self.eatToken(.comma)) |_|
                 try self.expectAccessMode()
             else
-                Ast.Node.null_node;
+                Ast.null_node;
             _ = try self.expectToken(.greater_than);
 
             const extra = try self.addExtra(Ast.Node.PtrType{

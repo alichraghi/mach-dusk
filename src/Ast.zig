@@ -71,6 +71,7 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
 }
 
 pub const TokenIndex = u32;
+pub const null_node: Node.Index = 0;
 
 pub const Node = struct {
     tag: Tag,
@@ -79,7 +80,6 @@ pub const Node = struct {
     rhs: Index = null_node,
 
     pub const Index = u32;
-    pub const null_node: Index = 0;
 
     pub const Tag = enum {
         /// a helper node pointing at extra_data[lhs..rhs].
@@ -265,7 +265,7 @@ test "no errors" {
     const t = std.time.microTimestamp() * std.time.ns_per_us;
     const source =
         \\;
-        \\@interpolate(flat) var expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3;
+        \\@interpolate(flat) var expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3 & 6;
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);

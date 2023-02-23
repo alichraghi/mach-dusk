@@ -30,9 +30,6 @@ pub fn expectGlobalDecl(self: *Parser) !Ast.Node.Index {
         // } else if (try self.typeAliasDecl()) |type_alias| {
         //     try self.addGlobal(.{ .type_alias = type_alias });
         //     _ = try self.expectToken(.semicolon);
-        // } else if (try self.globalConstDecl()) |const_decl| {
-        //     try self.addGlobal(.{ .@"const" = const_decl });
-        //     _ = try self.expectToken(.semicolon);
         // } else if (try self.globalOverrideDecl(attrs)) |override| {
         //     try self.addGlobal(.{ .override = override });
         //     _ = try self.expectToken(.semicolon);
@@ -43,6 +40,9 @@ pub fn expectGlobalDecl(self: *Parser) !Ast.Node.Index {
         //     _ = try self.expectToken(.semicolon);
         // } else if (try self.functionDecl(attrs)) |func| {
         //     try self.addGlobal(.{ .function = func });
+    } else if (try self.globalConstDecl()) |node| {
+        _ = try self.expectToken(.semicolon);
+        return node;
     }
 
     self.addError(
@@ -216,7 +216,7 @@ pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
 }
 
 pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
-    const var_token = self.eatToken(.keyword_var) orelse return null;
+    const main_token = self.eatToken(.keyword_var) orelse return null;
 
     // qualifier
     var addr_space = Ast.null_node;
@@ -258,33 +258,39 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     });
     return try self.addNode(.{
         .tag = .global_variable,
-        .main_token = var_token,
+        .main_token = main_token,
         .lhs = extra,
         .rhs = initializer,
     });
 }
 
-/// GlobalConstDecl : CONST OptionalyTypedIdent EQUAL Expr
-// pub fn globalConstDecl(self: *Parser) !?Ast.Const {
-//     if (self.eatToken(.keyword_const) == null) return null;
-//     const ident = try self.expectOptionalyTypedIdent();
-//     _ = try self.expectToken(.equal);
-//     const expr = try self.expression() orelse {
-//         self.addError(
-//             self.currentToken().loc,
-//             "expected initializer expression, found '{s}'",
-//             .{self.currentToken().tag.symbol()},
-//             &.{},
-//         );
-//         return error.Parsing;
-//     };
+pub fn globalConstDecl(self: *Parser) !?Ast.Node.Index {
+    const main_token = self.eatToken(.keyword_const) orelse return null;
 
-//     return .{
-//         .name = ident.name,
-//         .type = ident.type,
-//         .value = expr,
-//     };
-// }
+    _ = try self.expectToken(.ident);
+    var const_type = Ast.null_node;
+    if (self.eatToken(.colon)) |_| {
+        const_type = try self.expectTypeSpecifier();
+    }
+
+    _ = try self.expectToken(.equal);
+    const initializer = try self.expression() orelse {
+        self.addError(
+            self.currentToken().loc,
+            "expected initializer expression, found '{s}'",
+            .{self.currentToken().tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+
+    return try self.addNode(.{
+        .tag = .global_variable,
+        .main_token = main_token,
+        .lhs = const_type,
+        .rhs = initializer,
+    });
+}
 
 // /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
 // pub fn globalOverrideDecl(self: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Override {
@@ -832,10 +838,6 @@ pub fn expectAccessMode(self: *Parser) !Ast.TokenIndex {
 }
 
 pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
-    if (try self.callExpr()) |call| {
-        return call;
-    }
-
     const token = self.tok_i;
     switch (self.tokenAt(token).tag) {
         .keyword_true, .keyword_false => {
@@ -864,7 +866,10 @@ pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
             _ = self.next();
             return try self.addNode(.{ .tag = .ident_expr, .main_token = token });
         },
-        else => return null,
+        else => {
+            if (try self.callExpr()) |call| return call;
+            return null;
+        },
     }
 }
 

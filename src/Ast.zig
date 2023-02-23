@@ -93,6 +93,10 @@ pub const Node = struct {
         /// lhs is a VarDecl.
         /// rhs is initializer [Optional]
         global_variable,
+        /// main_token is 'const'.
+        /// lhs is type.
+        /// rhs is initializer
+        global_constant,
 
         // ********* Types *********
         /// main_token is ScalarType.
@@ -299,7 +303,8 @@ test Parser {
 test "no errors" {
     const source =
         \\;
-        \\@interpolate(flat) var<storage> expr = i32(5);
+        \\const expr = 5;
+        \\@interpolate(flat) var<storage> expr = (1 + 5) | 6;
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);

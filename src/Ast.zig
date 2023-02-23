@@ -299,7 +299,7 @@ test Parser {
 test "no errors" {
     const source =
         \\;
-        \\@interpdlate(flat) var<storage,> expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3 & 6;
+        \\@interpolate(flat) var<storage> expr = i32(5);
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);

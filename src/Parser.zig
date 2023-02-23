@@ -1,7 +1,10 @@
+//! Based on <SPEC_COMMIT>
 const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const comptimePrint = std.fmt.comptimePrint;
+const fieldNames = std.meta.fieldNames;
 const Parser = @This();
 
 allocator: std.mem.Allocator,
@@ -11,15 +14,12 @@ tok_i: u32,
 error_file: std.fs.File,
 failed: bool = false,
 
-/// GlobalDecl
-///   : SEMICOLON
-///   | GlobalVariableDecl   SEMICOLON
-///   | GlobalConstDecl      SEMICOLON
-///   | GlobalOverrideDecl   SEMICOLON
-///   | TypeAliasDecl        SEMICOLON
-///   | StructDecl
-///   | FunctionDecl         TODO
-///   | ConstAssertStatement SEMICOLON
+/// TODO: GlobalConstDecl      SEMICOLON
+/// TODO: GlobalOverrideDecl   SEMICOLON
+/// TODO: TypeAliasDecl        SEMICOLON
+/// TODO: StructDecl
+/// TODO: FunctionDecl
+/// TODO: ConstAssertStatement SEMICOLON
 pub fn expectGlobalDecl(self: *Parser) !Ast.Node.Index {
     while (self.eatToken(.semicolon)) |_| {}
 
@@ -66,38 +66,6 @@ pub fn attributeList(self: *Parser) !?Ast.Node.Index {
     return try self.listToSpan(list);
 }
 
-const attribute_list = std.ComptimeStringMap(Ast.Node.Tag, .{
-    .{ "invariant", .attr },
-    .{ "const", .attr },
-    .{ "vertex", .attr },
-    .{ "fragment", .attr },
-    .{ "compute", .attr },
-    .{ "align", .attr_one_arg },
-    .{ "binding", .attr_one_arg },
-    .{ "group", .attr_one_arg },
-    .{ "id", .attr_one_arg },
-    .{ "location", .attr_one_arg },
-    .{ "size", .attr_one_arg },
-    .{ "builtin", .attr_builtin },
-    .{ "workgroup_size", .attr_workgroup_size },
-    .{ "interpolate", .attr_interpolate },
-});
-
-/// Attribute :
-/// ATTR 'invariant'
-/// ATTR 'const'
-/// ATTR 'vertex'
-/// ATTR 'fragment'
-/// ATTR 'compute'
-/// ATTR 'align'          PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'binding'        PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'group'          PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'id'             PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'location'       PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'size'           PAREN_LEFT Expr                                           COMMA? PAREN_RIGHT
-/// ATTR 'builtin'        PAREN_LEFT BuiltinValue                                   COMMA? PAREN_RIGHT
-/// ATTR 'workgroup_size' PAREN_LEFT Expr              (COMMA Expr)?  (COMMA Expr)? COMMA? PAREN_RIGHT
-/// ATTR 'interpolate'    PAREN_LEFT InterpolationType (COMMA InterpolationSample)? COMMA? PAREN_RIGHT
 pub fn attribute(self: *Parser) !?Ast.Node.Index {
     const attr_token = self.eatToken(.attr) orelse return null;
     const ident_tok = try self.expectToken(.ident);
@@ -107,9 +75,7 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
             self.tokenAt(ident_tok).loc,
             "unknown attribute '{s}'",
             .{self.tokenAt(ident_tok).loc.asStr(self.source)},
-            &.{std.fmt.comptimePrint("valid options are [{s}]", .{
-                comptime std.meta.fieldNames(Ast.Attribute),
-            })},
+            comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.Attribute)})},
         );
         return error.Parsing;
     };
@@ -123,9 +89,7 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
         .vertex,
         .fragment,
         .compute,
-        => {
-            node.tag = .attr;
-        },
+        => node.tag = .attr,
         .@"align",
         .binding,
         .group,
@@ -230,9 +194,7 @@ pub fn expectInterpolationType(self: *Parser) !Ast.TokenIndex {
         self.tokenAt(token).loc,
         "unknown interpolation type name '{s}'",
         .{self.tokenAt(token).loc.asStr(self.source)},
-        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
-            comptime std.meta.fieldNames(Ast.InterpolationType),
-        })},
+        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationType)})},
     );
     return error.Parsing;
 }
@@ -248,18 +210,11 @@ pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
         self.tokenAt(token).loc,
         "unknown interpolation sample name '{s}'",
         .{self.tokenAt(token).loc.asStr(self.source)},
-        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
-            comptime std.meta.fieldNames(Ast.InterpolationSample),
-        })},
+        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationSample)})},
     );
     return error.Parsing;
 }
 
-/// GlobalVarDecl
-///   : Attribute* VAR
-///     ( LESS_THAN AddressSpace ( COMMA AccessMode )? )?
-///     IDENT ( COLON TypeSpecifier )?
-///     (EQUAL Expr)?
 pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     const var_token = self.eatToken(.keyword_var) orelse return null;
 
@@ -707,7 +662,6 @@ pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Node
     };
 }
 
-/// TypeSpecifier : IDENTIFIER | TypeSpecifierWithoutIdent
 pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
     if (self.currentToken().tag == .ident) {
         _ = self.next();
@@ -716,37 +670,27 @@ pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
     return self.typeSpecifierWithoutIdent();
 }
 
-/// TypeSpecifierWithoutIdent
-///   : BOOL
-///   | F16
-///   | F32
-///   | I32
-///   | U32
-///   | ARRAY        LESS_THAN TypeSpecifier ( COMMA ElementCountExpr )? GREATER_THAN
-///   | ATOMIC       LESS_THAN TypeSpecifier GREATER_THAN
-///   | PTR          LESS_THAN AddressSpace  COMMA TypeSpecifier ( COMMA AccessMode )? GREATER_THAN
-///   | MatrixPrefix LESS_THAN TypeSpecifier GREATER_THAN
-///   | VectorPrefix LESS_THAN TypeSpecifier GREATER_THAN
-///   | texture_and_sampler_types TODO
 pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
-    if (self.vectorPrefix()) |vec| {
+    if (self.isVectorPrefix()) {
+        const main_token = self.next();
         _ = try self.expectToken(.less_than);
         const elem_type = try self.expectTypeSpecifier();
         _ = try self.expectToken(.greater_than);
         return try self.addNode(.{
             .tag = .vector_type,
-            .main_token = vec,
+            .main_token = main_token,
             .lhs = elem_type,
         });
     }
 
-    if (self.matrixPrefix()) |vec| {
+    if (self.isMatrixPrefix()) {
+        const main_token = self.next();
         _ = try self.expectToken(.less_than);
         const elem_type = try self.expectTypeSpecifier();
         _ = try self.expectToken(.greater_than);
         return try self.addNode(.{
             .tag = .matrix_type,
-            .main_token = vec,
+            .main_token = main_token,
             .lhs = elem_type,
         });
     }
@@ -781,30 +725,24 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             _ = self.next();
             _ = try self.expectToken(.less_than);
             const elem_type = try self.expectTypeSpecifier();
+            var size = Ast.null_node;
             if (self.eatToken(.comma)) |_| {
-                const expr_token = self.currentToken();
-                const size = try self.elementCountExpr() orelse {
+                size = try self.elementCountExpr() orelse {
                     self.addError(
-                        expr_token.loc,
+                        self.currentToken().loc,
                         "expected array size expression, found '{s}'",
-                        .{expr_token.tag.symbol()},
+                        .{self.currentToken().tag.symbol()},
                         &.{},
                     );
                     return error.Parsing;
                 };
-                _ = try self.expectToken(.greater_than);
-                return try self.addNode(.{
-                    .tag = .array_type,
-                    .main_token = token,
-                    .lhs = elem_type,
-                    .rhs = size,
-                });
             }
             _ = try self.expectToken(.greater_than);
             return try self.addNode(.{
                 .tag = .array_type,
                 .main_token = token,
                 .lhs = elem_type,
+                .rhs = size,
             });
         },
         .keyword_ptr => {
@@ -835,35 +773,18 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
     }
 }
 
-/// VectorPrefix
-///   : 'vec2'
-///   | 'vec3'
-///   | 'vec4'
-pub fn vectorPrefix(self: *Parser) ?Ast.TokenIndex {
-    switch (self.currentToken().tag) {
+pub fn isVectorPrefix(self: *Parser) bool {
+    return switch (self.currentToken().tag) {
         .keyword_vec2,
         .keyword_vec3,
         .keyword_vec4,
-        => {
-            _ = self.next();
-            return self.tok_i;
-        },
-        else => return null,
-    }
+        => true,
+        else => false,
+    };
 }
 
-/// MatrixPrefix
-///   : 'mat2x2'
-///   | 'mat2x3'
-///   | 'mat2x4'
-///   | 'mat3x2'
-///   | 'mat3x3'
-///   | 'mat3x4'
-///   | 'mat4x2'
-///   | 'mat4x3'
-///   | 'mat4x4'
-pub fn matrixPrefix(self: *Parser) ?Ast.TokenIndex {
-    switch (self.currentToken().tag) {
+pub fn isMatrixPrefix(self: *Parser) bool {
+    return switch (self.currentToken().tag) {
         .keyword_mat2x2,
         .keyword_mat2x3,
         .keyword_mat2x4,
@@ -873,12 +794,9 @@ pub fn matrixPrefix(self: *Parser) ?Ast.TokenIndex {
         .keyword_mat4x2,
         .keyword_mat4x3,
         .keyword_mat4x4,
-        => {
-            _ = self.next();
-            return self.tok_i;
-        },
-        else => return null,
-    }
+        => true,
+        else => false,
+    };
 }
 
 pub fn expectAddressSpace(self: *Parser) !Ast.TokenIndex {
@@ -892,9 +810,7 @@ pub fn expectAddressSpace(self: *Parser) !Ast.TokenIndex {
         self.tokenAt(token).loc,
         "unknown address space '{s}'",
         .{self.tokenAt(token).loc.asStr(self.source)},
-        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
-            comptime std.meta.fieldNames(Ast.AddressSpace),
-        })},
+        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AddressSpace)})},
     );
     return error.Parsing;
 }
@@ -910,19 +826,11 @@ pub fn expectAccessMode(self: *Parser) !Ast.TokenIndex {
         self.tokenAt(token).loc,
         "unknown access mode '{s}'",
         .{self.tokenAt(token).loc.asStr(self.source)},
-        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
-            comptime std.meta.fieldNames(Ast.AccessMode),
-        })},
+        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AccessMode)})},
     );
     return error.Parsing;
 }
 
-/// PrimaryExpr
-///   : Literal
-///   | ParenExpr
-///   | CallExpr
-///   | IDENT      ArgumentExprList?
-///   | BITCAST    LESS_THAN TypeSpecifier GREATER_THAN ParenExpr
 pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
     if (try self.callExpr()) |call| {
         return call;
@@ -960,7 +868,6 @@ pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
     }
 }
 
-/// ParenExpr : PAREN_LEFT Expr PAREN_RIGHT
 pub fn expectParenExpr(self: *Parser) !Ast.Node.Index {
     _ = try self.expectToken(.paren_left);
     const expr = try self.expression() orelse {
@@ -976,70 +883,52 @@ pub fn expectParenExpr(self: *Parser) !Ast.Node.Index {
     return expr;
 }
 
-/// CallExpr
-///   : ( TypeSpecifierWithoutIdent
-///   |   ARRAY
-///   |   MatrixPrefix
-///   |   VectorPrefix )
-///   ArgumentExprList
 pub fn callExpr(self: *Parser) !?Ast.Node.Index {
-    if (self.currentToken().tag == .ident) {
-        if (self.peek().tag == .paren_left) {
-            const ident_token = self.next();
-            const args = try self.expectArgumentExprList();
-            return try self.addNode(.{
-                .tag = .call_expr,
-                .main_token = ident_token,
-                .rhs = args,
-            });
+    const main_token = self.tok_i;
+    var lhs = Ast.null_node;
+
+    // function call
+    if (self.currentToken().tag == .ident and self.peek().tag == .paren_left) {
+        _ = self.next();
+    }
+    // without template args ('vec2', 'array', etc)
+    else if (self.peek().tag != .less_than and
+        (self.isVectorPrefix() or
+        self.isMatrixPrefix() or
+        self.currentToken().tag == .keyword_array))
+    {
+        _ = self.next();
+    } else {
+        // maybe with template args ('i32', 'vec2<f32>', 'array<i32>', etc)
+        const type_node = try self.typeSpecifierWithoutIdent() orelse return null;
+        const tag = self.ast.nodes.items(.tag)[type_node];
+        switch (tag) {
+            .scalar_type,
+            .vector_type,
+            .matrix_type,
+            .array_type,
+            => lhs = type_node,
+            else => {
+                self.addError(
+                    self.tokenAt(main_token).loc,
+                    "type '{s}' can not be constructed",
+                    .{self.tokenAt(main_token).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            },
         }
-        return null;
     }
 
-    if (self.peek().tag != .less_than) {
-        if (self.vectorPrefix()) |vec| {
-            const args = try self.expectArgumentExprList();
-            return try self.addNode(.{ .tag = .call_expr, .main_token = vec, .rhs = args });
-        }
-        if (self.matrixPrefix()) |mat| {
-            const args = try self.expectArgumentExprList();
-            return try self.addNode(.{ .tag = .call_expr, .main_token = mat, .rhs = args });
-        }
-        if (self.currentToken().tag == .keyword_array) {
-            const arr_token = self.next();
-            const args = try self.expectArgumentExprList();
-            return try self.addNode(.{ .tag = .call_expr, .main_token = arr_token, .rhs = args });
-        }
-    }
-
-    const constructor = try self.typeSpecifierWithoutIdent() orelse return null;
-    const args = try self.expectArgumentExprList();
-    const constructor_main_token = self.ast.nodes.items(.main_token)[constructor];
-    const constructor_tag = self.ast.nodes.items(.tag)[constructor];
-    switch (constructor_tag) {
-        .scalar_type,
-        .vector_type,
-        .matrix_type,
-        .array_type,
-        => return try self.addNode(.{
-            .tag = .call_expr,
-            .main_token = constructor_main_token,
-            .lhs = constructor,
-            .rhs = args,
-        }),
-        else => {
-            self.addError(
-                self.tokenAt(constructor_main_token).loc,
-                "type '{s}' can't be called (not expression)",
-                .{self.tokenAt(constructor_main_token).tag.symbol()},
-                &.{},
-            );
-            return error.Parsing;
-        },
-    }
+    const rhs = try self.expectArgumentExprList();
+    return try self.addNode(.{
+        .tag = .call_expr,
+        .main_token = main_token,
+        .lhs = lhs,
+        .rhs = rhs,
+    });
 }
 
-/// ArgumentExprList : PAREN_LEFT ((Expr COMMA)* Expr COMMA?)? PAREN_RIGHT
 pub fn expectArgumentExprList(self: *Parser) !Ast.Node.Index {
     _ = try self.expectToken(.paren_left);
 
@@ -1048,7 +937,6 @@ pub fn expectArgumentExprList(self: *Parser) !Ast.Node.Index {
     while (true) {
         const expr = try self.expression() orelse break;
         try self.ast.scratch.append(self.allocator, expr);
-
         if (self.eatToken(.comma) == null) break;
     }
 
@@ -1058,22 +946,12 @@ pub fn expectArgumentExprList(self: *Parser) !Ast.Node.Index {
     return self.listToSpan(list);
 }
 
-/// ElementCountExpr
-///   : UnaryExpr MathExpr
-///   | UnaryExpr BitwiseExpr
 pub fn elementCountExpr(self: *Parser) !?Ast.Node.Index {
     const left = try self.unaryExpr() orelse return null;
     if (try self.bitwiseExpr(left)) |right| return right;
     return try self.expectMathExpr(left);
 }
 
-/// UnaryExpr
-///   : SingularExpr
-///   | MINUS UnaryExpr
-///   | BANG  UnaryExpr
-///   | TILDE UnaryExpr
-///   | STAR  UnaryExpr
-///   | AND   UnaryExpr
 pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
     const op_token = self.tok_i;
     const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
@@ -1102,15 +980,11 @@ pub fn unaryExpr(self: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
     });
 }
 
-/// SingularExpr : PrimaryExpr PostfixExpr
 pub fn singularExpr(self: *Parser) !?Ast.Node.Index {
     return self.primaryExpr();
     // TODO: component_or_swizzle_specifier
 }
 
-/// MultiplicativeExpr : UnaryExpr | (STAR | DIVISION | MOD MultiplicativeExpr)*
-///
-/// expects UnaryExpr
 pub fn expectMultiplicativeExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {
     var lhs = lhs_unary;
     while (true) {
@@ -1140,17 +1014,7 @@ pub fn expectMultiplicativeExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.N
     }
 }
 
-/// ComponentOrSwizzleSpecifier
-///   :
-///   | BRACE_LEFT Expr BRACE_RIGHT ComponentOrSwizzleSpecifier?
-///   | PERIOD MemberIdent ComponentOrSwizzleSpecifier?
-///   | PERIOD SwizzleName ComponentOrSwizzleSpecifier?
-//
-//  =============================================================
-//
-/// AdditiveExpr : MultiplicativeExpr | (PLUS | MINUS AdditiveExpr)*
-///
-/// expects first expression ( MultiplicativeExpr )
+/// TODO: ComponentOrSwizzleSpecifier
 pub fn expectAdditiveExpr(self: *Parser, lhs_mul: Ast.Node.Index) !Ast.Node.Index {
     var lhs = lhs_mul;
     while (true) {
@@ -1180,18 +1044,11 @@ pub fn expectAdditiveExpr(self: *Parser, lhs_mul: Ast.Node.Index) !Ast.Node.Inde
     }
 }
 
-/// MathExpr : MultiplicativeExpr AdditiveExpr
 pub fn expectMathExpr(self: *Parser, left: Ast.Node.Index) !Ast.Node.Index {
     const right = try self.expectMultiplicativeExpr(left);
     return self.expectAdditiveExpr(right);
 }
 
-/// ShiftExpr
-///   : MathExpr
-///   | UnaryExpr SHIFT_LEFT  UnaryExpr
-///   | UnaryExpr SHIFT_RIGHT UnaryExpr
-///
-/// expects first expression ( UnaryExpr )
 pub fn expectShiftExpr(self: *Parser, lhs: Ast.Node.Index) !Ast.Node.Index {
     const op_token = self.tok_i;
     const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
@@ -1219,16 +1076,6 @@ pub fn expectShiftExpr(self: *Parser, lhs: Ast.Node.Index) !Ast.Node.Index {
     });
 }
 
-// RelationalExpr
-//   : ShiftExpr
-//   | ShiftExpr EQUAL_EQUAL        ShiftExpr
-//   | ShiftExpr GREATER_THAN       ShiftExpr
-//   | ShiftExpr GREATER_THAN_EQUAL ShiftExpr
-//   | ShiftExpr LESS_THAN          ShiftExpr
-//   | ShiftExpr LESS_THAN_EQUAL    ShiftExpr
-//   | ShiftExpr NOT_EQUAL          ShiftExpr
-///
-/// expects first expression ( UnaryExpr )
 pub fn expectRelationalExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {
     const lhs = try self.expectShiftExpr(lhs_unary);
     const op_token = self.tok_i;
@@ -1261,12 +1108,6 @@ pub fn expectRelationalExpr(self: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.
     });
 }
 
-/// BitwiseExpr
-///   : UnaryExpr AND UnaryExpr (AND UnaryExpr)*
-///   | UnaryExpr OR  UnaryExpr (OR  UnaryExpr)*
-///   | UnaryExpr XOR UnaryExpr (XOR UnaryExpr)*
-///
-/// expects first expression ( UnaryExpr )
 pub fn bitwiseExpr(self: *Parser, lhs: Ast.Node.Index) !?Ast.Node.Index {
     const op_token = self.tok_i;
     const op: Ast.Node.Tag = switch (self.tokenAt(op_token).tag) {
@@ -1300,12 +1141,6 @@ pub fn bitwiseExpr(self: *Parser, lhs: Ast.Node.Index) !?Ast.Node.Index {
     }
 }
 
-/// ShortCircuitExpr
-///   : RelationalExpr
-///   | RelationalExpr (AND_AND RelationalExpr)*
-///   | RelationalExpr (OR_OR   RelationalExpr)*
-///
-/// expects first expression ( UnaryExpr )
 pub fn expectShortCircuitExpr(self: *Parser, lhs_relational: Ast.Node.Index) !Ast.Node.Index {
     var lhs = lhs_relational;
 
@@ -1341,11 +1176,6 @@ pub fn expectShortCircuitExpr(self: *Parser, lhs_relational: Ast.Node.Index) !As
     return lhs;
 }
 
-/// Expr
-///   : RelationalExpr
-///   | BitwiseExpr
-///   | RelationalExpr AND_AND RelationalExpr
-///   | RelationalExpr OR_OR   RelationalExpr
 pub fn expression(self: *Parser) !?Ast.Node.Index {
     const lhs_unary = try self.unaryExpr() orelse return null;
     if (try self.bitwiseExpr(lhs_unary)) |bitwise| return bitwise;

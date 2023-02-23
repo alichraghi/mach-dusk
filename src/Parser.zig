@@ -282,10 +282,15 @@ pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
     return error.Parsing;
 }
 
-/// GlobalVarDecl : Attribute* VariableDecl (EQUAL Expr)?
+/// GlobalVarDecl
+///   : Attribute* VAR
+///     ( LESS_THAN AddressSpace ( COMMA AccessMode )? )?
+///     IDENT ( COLON TypeSpecifier )?
+///     (EQUAL Expr)?
 pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     const var_token = self.eatToken(.keyword_var) orelse return null;
 
+    // qualifier
     var addr_space = Ast.null_node;
     var access_mode = Ast.null_node;
     if (self.eatToken(.less_than)) |_| {
@@ -297,14 +302,16 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
         _ = try self.expectToken(.greater_than);
     }
 
+    // name, type
     _ = try self.expectToken(.ident);
-    const var_type = if (self.eatToken(.colon)) |_|
-        try self.expectTypeSpecifier()
-    else
-        Ast.null_node;
+    var var_type = Ast.null_node;
+    if (self.eatToken(.colon)) |_| {
+        var_type = try self.expectTypeSpecifier();
+    }
 
-    const initializer = if (self.eatToken(.equal)) |_|
-        try self.expression() orelse {
+    var initializer = Ast.null_node;
+    if (self.eatToken(.equal)) |_| {
+        initializer = try self.expression() orelse {
             self.addError(
                 self.currentToken().loc,
                 "expected initializer expression, found '{s}'",
@@ -312,9 +319,8 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
                 &.{},
             );
             return error.Parsing;
-        }
-    else
-        Ast.null_node;
+        };
+    }
 
     const extra = try self.addExtra(.{
         .attrs = attrs orelse Ast.null_node,

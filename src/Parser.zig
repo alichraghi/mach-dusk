@@ -78,7 +78,7 @@ const attribute_list = std.ComptimeStringMap(Ast.Node.Tag, .{
     .{ "id", .attr_one_arg },
     .{ "location", .attr_one_arg },
     .{ "size", .attr_one_arg },
-    .{ "builtin", .attr_one_arg },
+    .{ "builtin", .attr_builtin },
     .{ "workgroup_size", .attr_workgroup_size },
     .{ "interpolate", .attr_interpolate },
 });
@@ -102,31 +102,44 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
     const attr_token = self.eatToken(.attr) orelse return null;
     const ident_tok = try self.expectToken(.ident);
     const str = self.tokenAt(ident_tok).loc.asStr(self.source);
-    const tag = attribute_list.get(str) orelse {
+    const tag = std.meta.stringToEnum(Ast.Attribute, str) orelse {
         self.addError(
             self.tokenAt(ident_tok).loc,
-            "invalid attribute name",
-            .{},
-            &.{
-                \\possible attributes are 
-                \\  'invariant', 'const', 'vertex', 'fragment', 'compute',
-                \\  'align', 'binding', 'group', 'id', 'location', 'size',
-                \\  'workgroup_size', 'builtin' and 'interpolate'
-            },
+            "unknown attribute '{s}'",
+            .{self.tokenAt(ident_tok).loc.asStr(self.source)},
+            &.{std.fmt.comptimePrint("valid options are [{s}]", .{
+                comptime std.meta.fieldNames(Ast.Attribute),
+            })},
         );
         return error.Parsing;
     };
     var node = Ast.Node{
-        .tag = tag,
+        .tag = undefined,
         .main_token = attr_token,
     };
     switch (tag) {
-        .attr => {},
-        .attr_one_arg => {
+        .invariant,
+        .@"const",
+        .vertex,
+        .fragment,
+        .compute,
+        => {
+            node.tag = .attr;
+        },
+        .@"align",
+        .binding,
+        .group,
+        .id,
+        .location,
+        .size,
+        .builtin,
+        => {
             _ = try self.expectToken(.paren_left);
-            if (std.mem.eql(u8, "builtin", str)) {
+            if (tag == .builtin) {
+                node.tag = .attr_builtin;
                 node.lhs = try self.expectBuiltinValue();
             } else {
+                node.tag = .attr_one_arg;
                 node.lhs = try self.expression() orelse {
                     self.addError(
                         self.currentToken().loc,
@@ -140,9 +153,10 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
             _ = self.eatToken(.comma);
             _ = try self.expectToken(.paren_right);
         },
-        .attr_workgroup_size => {
+        .workgroup_size => {
             _ = try self.expectToken(.paren_left);
 
+            node.tag = .attr_workgroup_size;
             node.lhs = try self.expression() orelse {
                 self.addError(self.currentToken().loc, "expected workgroup_size x parameter", .{}, &.{});
                 return error.Parsing;
@@ -165,14 +179,15 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
                     _ = self.eatToken(.comma);
                 }
 
-                const extra = try self.addExtra(workgroup_size);
-                node.rhs = extra;
+                node.rhs = try self.addExtra(workgroup_size);
             }
 
             _ = try self.expectToken(.paren_right);
         },
-        .attr_interpolate => {
+        .interpolate => {
             _ = try self.expectToken(.paren_left);
+
+            node.tag = .attr_interpolate;
             node.lhs = try self.expectInterpolationType();
 
             if (self.eatToken(.comma) != null and self.currentToken().tag != .paren_right) {
@@ -183,101 +198,59 @@ pub fn attribute(self: *Parser) !?Ast.Node.Index {
 
             _ = try self.expectToken(.paren_right);
         },
-        else => unreachable,
     }
 
     return try self.addNode(node);
 }
 
-/// BuiltinValue
-///   : 'vertex_index'
-///   | 'instance_index'
-///   | 'position'
-///   | 'front_facing'
-///   | 'frag_depth'
-///   | 'local_invocation_id'
-///   | 'local_invocation_index'
-///   | 'global_invocation_id'
-///   | 'workgroup_id'
-///   | 'num_workgroups'
-///   | 'sample_index'
-///   | 'sample_mask'
 pub fn expectBuiltinValue(self: *Parser) !Ast.TokenIndex {
     const token = self.next();
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
-        if (std.mem.eql(u8, "vertex_index", str) or
-            std.mem.eql(u8, "instance_index", str) or
-            std.mem.eql(u8, "position", str) or
-            std.mem.eql(u8, "front_facing", str) or
-            std.mem.eql(u8, "frag_depth", str) or
-            std.mem.eql(u8, "local_invocation_id", str) or
-            std.mem.eql(u8, "local_invocation_index", str) or
-            std.mem.eql(u8, "global_invocation_id", str) or
-            std.mem.eql(u8, "workgroup_id", str) or
-            std.mem.eql(u8, "num_workgroups", str) or
-            std.mem.eql(u8, "sample_index", str) or
-            std.mem.eql(u8, "sample_mask", str))
-        {
-            return token;
-        }
+        if (std.meta.stringToEnum(Ast.BuiltinValue, str)) |_| return token;
     }
 
     self.addError(
         self.tokenAt(token).loc,
         "expected builtin value name, found '{s}'",
-        .{self.tokenAt(token).tag.symbol()},
-        &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"},
+        .{self.tokenAt(token).loc.asStr(self.source)},
+        &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"}, // TODO
     );
     return error.Parsing;
 }
 
-/// InterpolationType
-///   : 'perspective'
-///   | 'linear'
-///   | 'flat'
 pub fn expectInterpolationType(self: *Parser) !Ast.TokenIndex {
     const token = self.next();
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
-        if (std.mem.eql(u8, "perspective", str) or
-            std.mem.eql(u8, "linear", str) or
-            std.mem.eql(u8, "flat", str))
-        {
-            return token;
-        }
+        if (std.meta.stringToEnum(Ast.InterpolationType, str)) |_| return token;
     }
 
     self.addError(
         self.tokenAt(token).loc,
-        "expected interpolation type name, found '{s}'",
-        .{self.tokenAt(token).tag.symbol()},
-        &.{"possible values are 'perspective', 'linear' and 'flat'"},
+        "unknown interpolation type name '{s}'",
+        .{self.tokenAt(token).loc.asStr(self.source)},
+        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
+            comptime std.meta.fieldNames(Ast.InterpolationType),
+        })},
     );
     return error.Parsing;
 }
 
-/// InterpolationSample
-///   : 'center'
-///   | 'centroid'
-///   | 'sample'
 pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
     const token = self.next();
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
-        if (std.mem.eql(u8, "center", str) or
-            std.mem.eql(u8, "centroid", str) or
-            std.mem.eql(u8, "sample", str))
-        {
-            return token;
-        }
+        if (std.meta.stringToEnum(Ast.InterpolationSample, str)) |_| return token;
     }
 
     self.addError(
         self.tokenAt(token).loc,
-        "expected interpolation sample name, found '{s}'",
-        .{self.tokenAt(token).tag.symbol()},
-        &.{"possible values are 'center', 'centroid' and 'sample'"},
+        "unknown interpolation sample name '{s}'",
+        .{self.tokenAt(token).loc.asStr(self.source)},
+        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
+            comptime std.meta.fieldNames(Ast.InterpolationSample),
+        })},
     );
     return error.Parsing;
 }
@@ -738,10 +711,7 @@ pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Node
 pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
     if (self.currentToken().tag == .ident) {
         _ = self.next();
-        return try self.addNode(.{
-            .tag = .user_type,
-            .main_token = self.tok_i,
-        });
+        return try self.addNode(.{ .tag = .user_type, .main_token = self.tok_i });
     }
     return self.typeSpecifierWithoutIdent();
 }
@@ -790,17 +760,11 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
         .keyword_bool,
         => {
             _ = self.next();
-            return try self.addNode(.{
-                .tag = .scalar_type,
-                .main_token = token,
-            });
+            return try self.addNode(.{ .tag = .scalar_type, .main_token = token });
         },
         .keyword_sampler, .keyword_comparison_sampler => {
             _ = self.next();
-            return try self.addNode(.{
-                .tag = .sampler_type,
-                .main_token = token,
-            });
+            return try self.addNode(.{ .tag = .sampler_type, .main_token = token });
         },
         .keyword_atomic => {
             _ = self.next();
@@ -850,10 +814,10 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             const addr_space = try self.expectAddressSpace();
             _ = try self.expectToken(.comma);
             const elem_type = try self.expectTypeSpecifier();
-            const access_mode = if (self.eatToken(.comma)) |_|
-                try self.expectAccessMode()
-            else
-                Ast.null_node;
+            var access_mode = Ast.null_node;
+            if (self.eatToken(.comma)) |_| {
+                access_mode = try self.expectAccessMode();
+            }
             _ = try self.expectToken(.greater_than);
 
             const extra = try self.addExtra(Ast.Node.PtrType{
@@ -917,55 +881,38 @@ pub fn matrixPrefix(self: *Parser) ?Ast.TokenIndex {
     }
 }
 
-/// AddressSpace
-///   : 'function'
-///   | 'private'
-///   | 'workgroup'
-///   | 'uniform'
-///   | 'storage'
 pub fn expectAddressSpace(self: *Parser) !Ast.TokenIndex {
-    const token = self.tok_i;
+    const token = self.next();
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
-        if (std.mem.eql(u8, "function", str) or
-            std.mem.eql(u8, "private", str) or
-            std.mem.eql(u8, "workgroup", str) or
-            std.mem.eql(u8, "uniform", str) or
-            std.mem.eql(u8, "storage", str))
-        {
-            _ = self.next();
-            return token;
-        }
+        if (std.meta.stringToEnum(Ast.AddressSpace, str)) |_| return token;
     }
 
     self.addError(
         self.tokenAt(token).loc,
-        "expected address space, found '{s}'",
-        .{self.tokenAt(token).tag.symbol()},
-        &.{"must be one of 'function', 'private', 'workgroup', 'uniform', 'storage'"},
+        "unknown address space '{s}'",
+        .{self.tokenAt(token).loc.asStr(self.source)},
+        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
+            comptime std.meta.fieldNames(Ast.AddressSpace),
+        })},
     );
     return error.Parsing;
 }
 
-/// AccessMode : 'read' | 'write' | 'read_write'
 pub fn expectAccessMode(self: *Parser) !Ast.TokenIndex {
-    const token = self.tok_i;
+    const token = self.next();
     if (self.tokenAt(token).tag == .ident) {
         const str = self.tokenAt(token).loc.asStr(self.source);
-        if (std.mem.eql(u8, "read", str) or
-            std.mem.eql(u8, "write", str) or
-            std.mem.eql(u8, "read_write", str))
-        {
-            _ = self.next();
-            return token;
-        }
+        if (std.meta.stringToEnum(Ast.AccessMode, str)) |_| return token;
     }
 
     self.addError(
         self.tokenAt(token).loc,
-        "expected access mode, found '{s}'",
-        .{self.tokenAt(token).tag.symbol()},
-        &.{"must be one of 'read', 'write', 'read_write'"},
+        "unknown access mode '{s}'",
+        .{self.tokenAt(token).loc.asStr(self.source)},
+        &.{std.fmt.comptimePrint("valid options are [{s}]", .{
+            comptime std.meta.fieldNames(Ast.AccessMode),
+        })},
     );
     return error.Parsing;
 }

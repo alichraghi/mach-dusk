@@ -131,8 +131,10 @@ pub const Node = struct {
         attr,
         /// @align(lhs)
         /// lhs is Expr
-        /// for @builtin, lhs is a TokenIndex
         attr_one_arg,
+        /// @builtin(lhs)
+        /// lhs is TokenIndex
+        attr_builtin,
         /// @workgroup_size(lhs, rhs.y, rhs.z)
         /// lhs is Expr
         /// rhs is WorkgroupSize [Optional]
@@ -229,6 +231,64 @@ pub const Node = struct {
     };
 };
 
+pub const BuiltinValue = enum {
+    vertex_index,
+    instance_index,
+    position,
+    front_facing,
+    frag_depth,
+    local_invocation_id,
+    local_invocation_index,
+    global_invocation_id,
+    workgroup_id,
+    num_workgroups,
+    sample_index,
+    sample_mask,
+};
+
+pub const InterpolationType = enum {
+    perspective,
+    linear,
+    flat,
+};
+
+pub const InterpolationSample = enum {
+    center,
+    centroid,
+    sample,
+};
+
+pub const AddressSpace = enum {
+    function,
+    private,
+    workgroup,
+    uniform,
+    storage,
+};
+
+pub const AccessMode = enum {
+    read,
+    write,
+    read_write,
+};
+
+pub const Attribute = enum {
+    invariant,
+    @"const",
+    vertex,
+    fragment,
+    compute,
+    @"align",
+    binding,
+    group,
+    id,
+    location,
+    size,
+    builtin,
+    workgroup_size,
+    interpolate,
+};
+
 const expect = std.testing.expect;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
@@ -239,7 +299,7 @@ test Parser {
 test "no errors" {
     const source =
         \\;
-        \\@interpolate(flat) var expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3 & 6;
+        \\@interpdlate(flat) var<storage,> expr = vec3<f32>(1, 5) + 5 - 9 * 7 / 3 & 6;
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);

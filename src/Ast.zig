@@ -105,6 +105,13 @@ pub const Node = struct {
         /// main_token is 'const_assert'
         /// lhs is an expression
         const_assert,
+        /// main_token is 'struct'
+        /// lhs is struct members
+        struct_decl,
+        /// main_token is member name (identifier)
+        /// lhs is attributes span
+        /// rhs is type
+        struct_member,
 
         // ********* Types *********
         /// main_token is ScalarType

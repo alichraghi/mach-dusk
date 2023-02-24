@@ -36,6 +36,8 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
     } else if (try p.constAssert()) |node| {
         _ = try p.expectToken(.semicolon);
         return node;
+    } else if (try p.structDecl()) |node| {
+        return node;
     }
     // else if (try p.structDecl()) |strct| {
     //     try p.addGlobal(.{ .@"struct" = strct });
@@ -339,52 +341,54 @@ pub fn typeAliasDecl(p: *Parser) !?Ast.Node.Index {
     });
 }
 
-// /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
-// pub fn structDecl(p: *Parser) !?Ast.Struct {
-//     if (p.eatToken(.keyword_struct) == null) return null;
-//     const name = try p.expectToken(.ident);
-//     _ = try p.expectToken(.brace_left);
+pub fn structDecl(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_struct) orelse return null;
+    _ = try p.expectToken(.ident);
+    _ = try p.expectToken(.brace_left);
 
-//     var members = std.ArrayList(Ast.Struct.Member).init(p.allocator);
-//     errdefer members.deinit();
+    const scratch_top = p.ast.scratch.items.len;
+    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    while (true) {
+        const attrs = try p.attributeList();
+        const member = try p.structMember(attrs) orelse {
+            if (attrs != null) {
+                p.addError(
+                    p.ast.tokens.peek(0).loc,
+                    "expected struct member, found '{s}'",
+                    .{p.ast.tokens.peek(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+            break;
+        };
+        try p.ast.scratch.append(p.allocator, member);
+        _ = p.eatToken(.comma);
+    }
 
-//     while (true) {
-//         const attrs = try p.attributeList();
-//         const member = try p.structMember(attrs) orelse {
-//             if (attrs != null) {
-//                 p.addError(
-//                     p.ast.tokens.peek(0).loc,
-//                     "expected struct member, found '{s}'",
-//                     .{p.ast.tokens.peek(0).tag.symbol()},
-//                     &.{},
-//                 );
-//                 return error.Parsing;
-//             }
-//             break;
-//         };
-//         try members.append(member);
-//         _ = p.eatToken(.comma);
-//     }
+    _ = try p.expectToken(.brace_right);
 
-//     _ = try p.expectToken(.brace_right);
+    const list = p.ast.scratch.items[scratch_top..];
+    const members = try p.listToSpan(list);
 
-//     return .{
-//         .name = name.loc.asStr(p.source),
-//         .members = try members.toOwnedSlice(),
-//     };
-// }
+    return try p.addNode(.{
+        .tag = .struct_decl,
+        .main_token = main_token,
+        .lhs = members,
+    });
+}
 
-// /// StructMember : Attribute* TypedIdent
-// pub fn structMember(p: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Struct.Member {
-//     const name = p.eatToken(.ident) orelse return null;
-//     _ = try p.expectToken(.colon);
-//     const member_type = try p.expectTypeSpecifier();
-//     return .{
-//         .name = name.loc.asStr(p.source),
-//         .type = member_type,
-//         .attrs = attrs,
-//     };
-// }
+pub fn structMember(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
+    const name_token = p.eatToken(.ident) orelse return null;
+    _ = try p.expectToken(.colon);
+    const member_type = try p.expectTypeSpecifier();
+    return try p.addNode(.{
+        .tag = .struct_member,
+        .main_token = name_token,
+        .lhs = attrs orelse null_index,
+        .rhs = member_type,
+    });
+}
 
 pub fn constAssert(p: *Parser) !?Ast.Node.Index {
     const main_token = p.eatToken(.keyword_const_assert) orelse return null;

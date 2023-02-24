@@ -70,59 +70,63 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     allocator.free(self.tokens.list);
 }
 
-pub const null_node: Node.Index = 0;
+pub const null_index: Node.Index = 0;
 pub const Node = struct {
     tag: Tag,
     main_token: TokenList.Index,
-    lhs: Index = null_node,
-    rhs: Index = null_node,
+    lhs: Index = null_index,
+    rhs: Index = null_index,
 
     pub const Index = u32;
 
     pub const Tag = enum {
-        /// a helper node pointing at extra_data[lhs..rhs].
+        /// a helper node pointing at extra_data[lhs..rhs]
         span,
 
-        /// root node pointing at extra_data[lhs..rhs].
+        /// root node pointing at extra_data[lhs..rhs]
         translation_unit,
 
         // ********* Global declarations *********
-        /// main_token is 'var'.
-        /// lhs is a VarDecl.
+        /// main_token is 'var'
+        /// lhs is a GlobalVarDecl
         /// rhs is initializer [Optional]
         global_variable,
-        /// main_token is 'const'.
-        /// lhs is type.
+        /// main_token is 'const'
+        /// lhs is type
         /// rhs is initializer
         global_constant,
+        /// main_token is 'override'
+        /// lhs is GlobalOverrideDecl
+        /// rhs is initializer
+        global_override,
 
         // ********* Types *********
-        /// main_token is ScalarType.
+        /// main_token is ScalarType
         scalar_type,
-        /// main_token is SamplerType.
+        /// main_token is SamplerType
         sampler_type,
         /// vec2<lhs>
-        /// main_token is VectorPrefix.
-        /// lhs is element type.
+        /// main_token is VectorPrefix
+        /// lhs is element type
         vector_type,
         /// mat2x2<lhs>
         /// main_token is MatrixPrefix
-        /// lhs is element type.
+        /// lhs is element type
         matrix_type,
         /// atomic<lhs>
-        /// main_token is 'atomic'.
-        /// lhs is element type.
+        /// main_token is 'atomic'
+        /// lhs is element type
         atomic_type,
         /// array<lhs, rhs>
-        /// main_token is 'array'.
-        /// lhs is element type.
+        /// main_token is 'array'
+        /// lhs is element type
         /// rhs is array size [Optional]
         array_type,
         /// ptr<rhs.addr_space, lhs, rhs.access_mode>
-        /// main_token is 'ptr'.
-        /// lhs is element type.
-        /// rhs is PtrType.
-        /// rhs.access_mode may be null.
+        /// main_token is 'ptr'
+        /// lhs is element type
+        /// rhs is PtrType
+        /// rhs.access_mode may be null
         ptr_type,
         /// main_token is identifier
         user_type,
@@ -217,19 +221,24 @@ pub const Node = struct {
 
     pub const PtrType = struct {
         addr_space: TokenList.Index,
-        access_mode: TokenList.Index = null_node,
+        access_mode: TokenList.Index = null_index,
     };
 
-    pub const VarDecl = struct {
-        attrs: Index = null_node,
-        addr_space: TokenList.Index = null_node,
-        access_mode: TokenList.Index = null_node,
-        type: Index = null_node,
+    pub const GlobalVarDecl = struct {
+        attrs: Index = null_index,
+        addr_space: TokenList.Index = null_index,
+        access_mode: TokenList.Index = null_index,
+        type: Index = null_index,
+    };
+
+    pub const GlobalOverrideDecl = struct {
+        attrs: Index = null_index,
+        type: Index = null_index,
     };
 
     pub const WorkgroupSize = struct {
         y: Index,
-        z: Index = null_node,
+        z: Index = null_index,
     };
 };
 

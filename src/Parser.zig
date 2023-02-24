@@ -5,7 +5,7 @@ const Token = @import("Token.zig");
 const TokenList = @import("TokenList.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const fieldNames = std.meta.fieldNames;
-const null_node = Ast.null_node;
+const null_index = Ast.null_index;
 const Parser = @This();
 
 allocator: std.mem.Allocator,
@@ -26,23 +26,26 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
     if (try p.globalVarDecl(attrs)) |node| {
         _ = try p.expectToken(.semicolon);
         return node;
-        // } else if (try p.typeAliasDecl()) |type_alias| {
-        //     try p.addGlobal(.{ .type_alias = type_alias });
-        //     _ = try p.expectToken(.semicolon);
-        // } else if (try p.globalOverrideDecl(attrs)) |override| {
-        //     try p.addGlobal(.{ .override = override });
-        //     _ = try p.expectToken(.semicolon);
-        // } else if (try p.structDecl()) |strct| {
-        //     try p.addGlobal(.{ .@"struct" = strct });
-        // } else if (try p.constAssert()) |assert| {
-        //     try p.addGlobal(.{ .const_assert = assert });
-        //     _ = try p.expectToken(.semicolon);
-        // } else if (try p.functionDecl(attrs)) |func| {
-        //     try p.addGlobal(.{ .function = func });
+    } else if (try p.globalOverrideDecl(attrs)) |node| {
+        _ = try p.expectToken(.semicolon);
+        return node;
     } else if (try p.globalConstDecl()) |node| {
         _ = try p.expectToken(.semicolon);
         return node;
     }
+    // } else if (try p.typeAliasDecl()) |type_alias| {
+    //     try p.addGlobal(.{ .type_alias = type_alias });
+    //     _ = try p.expectToken(.semicolon);
+    // } else if (try p.globalOverrideDecl(attrs)) |override| {
+    //     try p.addGlobal(.{ .override = override });
+    //     _ = try p.expectToken(.semicolon);
+    // } else if (try p.structDecl()) |strct| {
+    //     try p.addGlobal(.{ .@"struct" = strct });
+    // } else if (try p.constAssert()) |assert| {
+    //     try p.addGlobal(.{ .const_assert = assert });
+    //     _ = try p.expectToken(.semicolon);
+    // } else if (try p.functionDecl(attrs)) |func| {
+    //     try p.addGlobal(.{ .function = func });
 
     p.addError(
         p.ast.tokens.peek(0).loc,
@@ -218,25 +221,25 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     const var_token = p.eatToken(.keyword_var) orelse return null;
 
     // qualifier
-    var addr_space = null_node;
-    var access_mode = null_node;
+    var addr_space = null_index;
+    var access_mode = null_index;
     if (p.eatToken(.less_than)) |_| {
         addr_space = try p.expectAddressSpace();
         access_mode = if (p.eatToken(.comma)) |_|
             try p.expectAccessMode()
         else
-            null_node;
+            null_index;
         _ = try p.expectToken(.greater_than);
     }
 
     // name, type
     _ = try p.expectToken(.ident);
-    var var_type = null_node;
+    var var_type = null_index;
     if (p.eatToken(.colon)) |_| {
         var_type = try p.expectTypeSpecifier();
     }
 
-    var initializer = null_node;
+    var initializer = null_index;
     if (p.eatToken(.equal)) |_| {
         initializer = try p.expression() orelse {
             p.addError(
@@ -249,8 +252,8 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
         };
     }
 
-    const extra = try p.addExtra(.{
-        .attrs = attrs orelse null_node,
+    const extra = try p.addExtra(Ast.Node.GlobalVarDecl{
+        .attrs = attrs orelse null_index,
         .addr_space = addr_space,
         .access_mode = access_mode,
         .type = var_type,
@@ -267,7 +270,7 @@ pub fn globalConstDecl(p: *Parser) !?Ast.Node.Index {
     const const_token = p.eatToken(.keyword_const) orelse return null;
 
     _ = try p.expectToken(.ident);
-    var const_type = null_node;
+    var const_type = null_index;
     if (p.eatToken(.colon)) |_| {
         const_type = try p.expectTypeSpecifier();
     }
@@ -291,30 +294,40 @@ pub fn globalConstDecl(p: *Parser) !?Ast.Node.Index {
     });
 }
 
-// /// GlobalOverrideDecl : Attribute* OVERRIDE OptionalyTypedIdent (EQUAL Expr)?
-// pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Override {
-//     if (p.eatToken(.keyword_override) == null) return null;
-//     const ident = try p.expectOptionalyTypedIdent();
-//     const expr = if (p.eatToken(.equal)) |_|
-//         try p.expression() orelse {
-//             p.addError(
-//                 p.ast.tokens.peek(0).loc,
-//                 "expected initializer expression, found '{s}'",
-//                 .{p.ast.tokens.peek(0).tag.symbol()},
-//                 &.{},
-//             );
-//             return error.Parsing;
-//         }
-//     else
-//         null;
+pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
+    const override_token = p.eatToken(.keyword_override) orelse return null;
 
-//     return .{
-//         .name = ident.name,
-//         .type = ident.type,
-//         .value = expr,
-//         .attrs = attrs,
-//     };
-// }
+    // name, type
+    _ = try p.expectToken(.ident);
+    var override_type = null_index;
+    if (p.eatToken(.colon)) |_| {
+        override_type = try p.expectTypeSpecifier();
+    }
+
+    var initializer = null_index;
+    if (p.eatToken(.equal)) |_| {
+        initializer = try p.expression() orelse {
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected initializer expression, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+    }
+
+    const extra = try p.addExtra(Ast.Node.GlobalOverrideDecl{
+        .attrs = attrs orelse null_index,
+        .type = override_type,
+    });
+    return try p.addNode(.{
+        .tag = .global_variable,
+        .main_token = override_token,
+        .lhs = extra,
+        .rhs = initializer,
+    });
+}
 
 // /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
 // pub fn structDecl(p: *Parser) !?Ast.Struct {
@@ -718,7 +731,7 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Node.Index {
             _ = p.ast.tokens.advance();
             _ = try p.expectToken(.less_than);
             const elem_type = try p.expectTypeSpecifier();
-            var size = null_node;
+            var size = null_index;
             if (p.eatToken(.comma)) |_| {
                 size = try p.elementCountExpr() orelse {
                     p.addError(
@@ -745,7 +758,7 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Node.Index {
             const addr_space = try p.expectAddressSpace();
             _ = try p.expectToken(.comma);
             const elem_type = try p.expectTypeSpecifier();
-            var access_mode = null_node;
+            var access_mode = null_index;
             if (p.eatToken(.comma)) |_| {
                 access_mode = try p.expectAccessMode();
             }
@@ -877,7 +890,7 @@ pub fn expectParenExpr(p: *Parser) !Ast.Node.Index {
 
 pub fn callExpr(p: *Parser) !?Ast.Node.Index {
     const main_token = p.ast.tokens.index;
-    var lhs = null_node;
+    var lhs = null_index;
 
     // function call
     if (p.ast.tokens.peek(0).tag == .ident and p.ast.tokens.peek(1).tag == .paren_left) {

@@ -70,12 +70,10 @@ pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     allocator.free(self.tokens.list);
 }
 
-pub const TokenIndex = u32;
 pub const null_node: Node.Index = 0;
-
 pub const Node = struct {
     tag: Tag,
-    main_token: TokenIndex,
+    main_token: TokenList.Index,
     lhs: Index = null_node,
     rhs: Index = null_node,
 
@@ -137,15 +135,15 @@ pub const Node = struct {
         /// lhs is Expr
         attr_one_arg,
         /// @builtin(lhs)
-        /// lhs is TokenIndex
+        /// lhs is TokenList.Index
         attr_builtin,
         /// @workgroup_size(lhs, rhs.y, rhs.z)
         /// lhs is Expr
         /// rhs is WorkgroupSize [Optional]
         attr_workgroup_size,
         /// @workgroup(lhs, rhs)
-        /// lhs is InterpolationType   [TokenIndex]
-        /// rhs is InterpolationSample [TokenIndex] [Optional]
+        /// lhs is InterpolationType   [TokenList.Index]
+        /// rhs is InterpolationSample [TokenList.Index] [Optional]
         attr_interpolate,
 
         // ********* Operators *********
@@ -218,14 +216,14 @@ pub const Node = struct {
     };
 
     pub const PtrType = struct {
-        addr_space: TokenIndex,
-        access_mode: TokenIndex = null_node,
+        addr_space: TokenList.Index,
+        access_mode: TokenList.Index = null_node,
     };
 
     pub const VarDecl = struct {
         attrs: Index = null_node,
-        addr_space: TokenIndex = null_node,
-        access_mode: TokenIndex = null_node,
+        addr_space: TokenList.Index = null_node,
+        access_mode: TokenList.Index = null_node,
         type: Index = null_node,
     };
 

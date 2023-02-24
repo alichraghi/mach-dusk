@@ -2,7 +2,7 @@
 const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
-const Tokenizer = @import("Tokenizer.zig");
+const TokenList = @import("TokenList.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const fieldNames = std.meta.fieldNames;
 const null_node = Ast.null_node;
@@ -166,7 +166,7 @@ pub fn attribute(p: *Parser) !?Ast.Node.Index {
     return try p.addNode(node);
 }
 
-pub fn expectBuiltinValue(p: *Parser) !Ast.TokenIndex {
+pub fn expectBuiltinValue(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
         const str = p.ast.tokens.get(token).loc.asStr(p.source);
@@ -182,7 +182,7 @@ pub fn expectBuiltinValue(p: *Parser) !Ast.TokenIndex {
     return error.Parsing;
 }
 
-pub fn expectInterpolationType(p: *Parser) !Ast.TokenIndex {
+pub fn expectInterpolationType(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
         const str = p.ast.tokens.get(token).loc.asStr(p.source);
@@ -792,7 +792,7 @@ pub fn isMatrixPrefix(p: *Parser) bool {
     };
 }
 
-pub fn expectAddressSpace(p: *Parser) !Ast.TokenIndex {
+pub fn expectAddressSpace(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
         const str = p.ast.tokens.get(token).loc.asStr(p.source);
@@ -808,7 +808,7 @@ pub fn expectAddressSpace(p: *Parser) !Ast.TokenIndex {
     return error.Parsing;
 }
 
-pub fn expectAccessMode(p: *Parser) !Ast.TokenIndex {
+pub fn expectAccessMode(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
         const str = p.ast.tokens.get(token).loc.asStr(p.source);
@@ -1175,7 +1175,7 @@ pub fn expression(p: *Parser) !?Ast.Node.Index {
     return try p.expectShortCircuitExpr(lhs);
 }
 
-pub fn expectToken(p: *Parser, tag: Token.Tag) !Ast.TokenIndex {
+pub fn expectToken(p: *Parser, tag: Token.Tag) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == tag) return token;
 
@@ -1188,7 +1188,7 @@ pub fn expectToken(p: *Parser, tag: Token.Tag) !Ast.TokenIndex {
     return error.Parsing;
 }
 
-pub fn eatToken(p: *Parser, tag: Token.Tag) ?Ast.TokenIndex {
+pub fn eatToken(p: *Parser, tag: Token.Tag) ?TokenList.Index {
     return if (p.ast.tokens.peek(0).tag == tag) p.ast.tokens.advance() else null;
 }
 
@@ -1213,7 +1213,7 @@ fn addExtra(p: *Parser, extra: anytype) error{OutOfMemory}!Ast.Node.Index {
     try p.ast.extra_data.ensureUnusedCapacity(p.allocator, fields.len);
     const result = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
     inline for (fields) |field| {
-        comptime std.debug.assert(field.type == Ast.Node.Index or field.type == Ast.TokenIndex);
+        comptime std.debug.assert(field.type == Ast.Node.Index or field.type == TokenList.Index);
         p.ast.extra_data.appendAssumeCapacity(@field(extra, field.name));
     }
     return result;

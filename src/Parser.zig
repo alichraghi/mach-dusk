@@ -14,7 +14,6 @@ tok_i: u32,
 error_file: std.fs.File,
 failed: bool = false,
 
-/// TODO: GlobalConstDecl      SEMICOLON
 /// TODO: GlobalOverrideDecl   SEMICOLON
 /// TODO: TypeAliasDecl        SEMICOLON
 /// TODO: StructDecl
@@ -176,9 +175,9 @@ pub fn expectBuiltinValue(self: *Parser) !Ast.TokenIndex {
 
     self.addError(
         self.tokenAt(token).loc,
-        "expected builtin value name, found '{s}'",
+        "unknown builtin value name '{s}'",
         .{self.tokenAt(token).loc.asStr(self.source)},
-        &.{"see https://gpuweb.github.io/gpuweb/wgsl/#syntax-builtin_value_name for list of values"}, // TODO
+        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.BuiltinValue)})},
     );
     return error.Parsing;
 }
@@ -216,7 +215,7 @@ pub fn expectInterpolationSample(self: *Parser) !Ast.Node.Index {
 }
 
 pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
-    const main_token = self.eatToken(.keyword_var) orelse return null;
+    const var_token = self.eatToken(.keyword_var) orelse return null;
 
     // qualifier
     var addr_space = Ast.null_node;
@@ -258,14 +257,14 @@ pub fn globalVarDecl(self: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     });
     return try self.addNode(.{
         .tag = .global_variable,
-        .main_token = main_token,
+        .main_token = var_token,
         .lhs = extra,
         .rhs = initializer,
     });
 }
 
 pub fn globalConstDecl(self: *Parser) !?Ast.Node.Index {
-    const main_token = self.eatToken(.keyword_const) orelse return null;
+    const const_token = self.eatToken(.keyword_const) orelse return null;
 
     _ = try self.expectToken(.ident);
     var const_type = Ast.null_node;
@@ -286,7 +285,7 @@ pub fn globalConstDecl(self: *Parser) !?Ast.Node.Index {
 
     return try self.addNode(.{
         .tag = .global_variable,
-        .main_token = main_token,
+        .main_token = const_token,
         .lhs = const_type,
         .rhs = initializer,
     });
@@ -670,39 +669,27 @@ pub fn expectTypeSpecifier(self: *Parser) error{ OutOfMemory, Parsing }!Ast.Node
 
 pub fn typeSpecifier(self: *Parser) !?Ast.Node.Index {
     if (self.currentToken().tag == .ident) {
-        _ = self.next();
-        return try self.addNode(.{ .tag = .user_type, .main_token = self.tok_i });
+        const main_token = self.next();
+        return try self.addNode(.{ .tag = .user_type, .main_token = main_token });
     }
     return self.typeSpecifierWithoutIdent();
 }
 
 pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
-    if (self.isVectorPrefix()) {
+    if (self.isVectorPrefix() or self.isMatrixPrefix()) {
         const main_token = self.next();
         _ = try self.expectToken(.less_than);
         const elem_type = try self.expectTypeSpecifier();
         _ = try self.expectToken(.greater_than);
         return try self.addNode(.{
-            .tag = .vector_type,
+            .tag = if (self.isVectorPrefix()) .vector_type else .matrix_type,
             .main_token = main_token,
             .lhs = elem_type,
         });
     }
 
-    if (self.isMatrixPrefix()) {
-        const main_token = self.next();
-        _ = try self.expectToken(.less_than);
-        const elem_type = try self.expectTypeSpecifier();
-        _ = try self.expectToken(.greater_than);
-        return try self.addNode(.{
-            .tag = .matrix_type,
-            .main_token = main_token,
-            .lhs = elem_type,
-        });
-    }
-
-    const token = self.tok_i;
-    switch (self.tokenAt(token).tag) {
+    const main_token = self.tok_i;
+    switch (self.tokenAt(main_token).tag) {
         .keyword_i32,
         .keyword_u32,
         .keyword_f32,
@@ -710,11 +697,11 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
         .keyword_bool,
         => {
             _ = self.next();
-            return try self.addNode(.{ .tag = .scalar_type, .main_token = token });
+            return try self.addNode(.{ .tag = .scalar_type, .main_token = main_token });
         },
         .keyword_sampler, .keyword_comparison_sampler => {
             _ = self.next();
-            return try self.addNode(.{ .tag = .sampler_type, .main_token = token });
+            return try self.addNode(.{ .tag = .sampler_type, .main_token = main_token });
         },
         .keyword_atomic => {
             _ = self.next();
@@ -723,7 +710,7 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             _ = try self.expectToken(.greater_than);
             return try self.addNode(.{
                 .tag = .atomic_type,
-                .main_token = token,
+                .main_token = main_token,
                 .lhs = elem_type,
             });
         },
@@ -746,7 +733,7 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             _ = try self.expectToken(.greater_than);
             return try self.addNode(.{
                 .tag = .array_type,
-                .main_token = token,
+                .main_token = main_token,
                 .lhs = elem_type,
                 .rhs = size,
             });
@@ -770,7 +757,7 @@ pub fn typeSpecifierWithoutIdent(self: *Parser) !?Ast.Node.Index {
             });
             return try self.addNode(.{
                 .tag = .ptr_type,
-                .main_token = token,
+                .main_token = main_token,
                 .lhs = elem_type,
                 .rhs = extra,
             });
@@ -838,15 +825,15 @@ pub fn expectAccessMode(self: *Parser) !Ast.TokenIndex {
 }
 
 pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
-    const token = self.tok_i;
-    switch (self.tokenAt(token).tag) {
+    const main_token = self.tok_i;
+    switch (self.tokenAt(main_token).tag) {
         .keyword_true, .keyword_false => {
             _ = self.next();
-            return try self.addNode(.{ .tag = .bool_literal, .main_token = token });
+            return try self.addNode(.{ .tag = .bool_literal, .main_token = main_token });
         },
         .number => {
             _ = self.next();
-            return try self.addNode(.{ .tag = .number_literal, .main_token = token });
+            return try self.addNode(.{ .tag = .number_literal, .main_token = main_token });
         },
         .keyword_bitcast => {
             _ = self.next();
@@ -856,7 +843,7 @@ pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
             const expr = try self.expectParenExpr();
             return try self.addNode(.{
                 .tag = .bitcast_expr,
-                .main_token = token,
+                .main_token = main_token,
                 .lhs = dest_type,
                 .rhs = expr,
             });
@@ -864,7 +851,7 @@ pub fn primaryExpr(self: *Parser) !?Ast.Node.Index {
         .paren_left => return try self.expectParenExpr(),
         .ident => {
             _ = self.next();
-            return try self.addNode(.{ .tag = .ident_expr, .main_token = token });
+            return try self.addNode(.{ .tag = .ident_expr, .main_token = main_token });
         },
         else => {
             if (try self.callExpr()) |call| return call;

@@ -1,14 +1,15 @@
 const std = @import("std");
 const Token = @import("Token.zig");
-const Parser = @import("Parser.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const TokenList = @import("TokenList.zig");
+const Parser = @import("Parser.zig");
 
 const Ast = @This();
 
 nodes: std.MultiArrayList(Node) = .{},
 extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
 scratch: std.ArrayListUnmanaged(Node.Index) = .{},
-tokens: []const Token,
+tokens: TokenList,
 
 /// parses a TranslationUnit(WGSL Program)
 pub fn parse(
@@ -25,49 +26,48 @@ pub fn parse(
         if (t.tag == .eof) break;
     }
 
-    var parser = Parser{
+    var p = Parser{
         .allocator = allocator,
         .source = source,
-        .ast = .{ .tokens = try tokens.toOwnedSlice() },
-        .tok_i = 0,
+        .ast = .{ .tokens = .{ .list = try tokens.toOwnedSlice() } },
         .error_file = error_file orelse std.io.getStdErr(),
     };
-    errdefer parser.ast.deinit(allocator);
+    errdefer p.ast.deinit(allocator);
 
-    const estimated_nodes = (parser.ast.tokens.len + 2) / 2;
-    try parser.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
+    const estimated_nodes = (p.ast.tokens.list.len + 2) / 2;
+    try p.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
 
-    _ = parser.addNode(.{
+    _ = p.addNode(.{
         .tag = .translation_unit,
         .main_token = 0,
     }) catch unreachable;
 
-    const scratch_top = parser.ast.scratch.items.len;
-    defer parser.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.ast.scratch.items.len;
+    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
 
-    while (parser.currentToken().tag != .eof) {
-        const decl = parser.expectGlobalDecl() catch |err| {
+    while (p.ast.tokens.peek(0).tag != .eof) {
+        const decl = p.expectGlobalDecl() catch |err| {
             if (err == error.Parsing) {
-                parser.continueUntilOrEOF(.semicolon);
+                p.ast.tokens.advanceUntil(.semicolon);
                 continue;
             } else return err;
         };
-        try parser.ast.scratch.append(allocator, decl);
+        try p.ast.scratch.append(allocator, decl);
     }
 
-    const list = parser.ast.scratch.items[scratch_top..];
-    try parser.ast.extra_data.appendSlice(allocator, list);
-    parser.ast.nodes.items(.lhs)[0] = @intCast(Ast.Node.Index, parser.ast.extra_data.items.len - list.len);
-    parser.ast.nodes.items(.rhs)[0] = @intCast(Ast.Node.Index, parser.ast.extra_data.items.len);
+    const list = p.ast.scratch.items[scratch_top..];
+    try p.ast.extra_data.appendSlice(allocator, list);
+    p.ast.nodes.items(.lhs)[0] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
+    p.ast.nodes.items(.rhs)[0] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
 
-    return parser.ast;
+    return p.ast;
 }
 
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.nodes.deinit(allocator);
     self.extra_data.deinit(allocator);
     self.scratch.deinit(allocator);
-    allocator.free(self.tokens);
+    allocator.free(self.tokens.list);
 }
 
 pub const TokenIndex = u32;
@@ -367,7 +367,7 @@ test "variable & expressions" {
 
     const @"var expr = 1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(ast.extra_data.items[root.lhs]);
     try expect(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".tag == .global_variable);
-    try expect(ast.tokens[@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token].tag == .keyword_var);
+    try expect(ast.tokens.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .keyword_var);
 
     const @"1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".rhs);
     try expect(@"1 + 5 + 2 * 3 > 6 >> 7".tag == .greater);

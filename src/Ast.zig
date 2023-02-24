@@ -89,19 +89,22 @@ pub const Node = struct {
         // ********* Global declarations *********
         /// main_token is 'var'
         /// lhs is a GlobalVarDecl
-        /// rhs is initializer [Optional]
+        /// rhs is initializer expression [Optional]
         global_variable,
         /// main_token is 'const'
         /// lhs is type
-        /// rhs is initializer
+        /// rhs is initializer expression
         global_constant,
         /// main_token is 'override'
         /// lhs is GlobalOverrideDecl
-        /// rhs is initializer
+        /// rhs is initializer expression
         global_override,
         /// main_token is 'type'
         /// lhs is a type
         type_alias,
+        /// main_token is 'const_assert'
+        /// lhs is an expression
+        const_assert,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -123,13 +126,13 @@ pub const Node = struct {
         /// array<lhs, rhs>
         /// main_token is 'array'
         /// lhs is element type
-        /// rhs is array size [Optional]
+        /// rhs is array size expression [Optional]
         array_type,
         /// ptr<rhs.addr_space, lhs, rhs.access_mode>
         /// main_token is 'ptr'
         /// lhs is element type
         /// rhs is PtrType
-        /// rhs.access_mode may be null
+        /// rhs.access_mode is [Optional]
         ptr_type,
         /// main_token is identifier
         user_type,
@@ -139,13 +142,13 @@ pub const Node = struct {
         /// @const
         attr,
         /// @align(lhs)
-        /// lhs is Expr
+        /// lhs is an expression
         attr_one_arg,
         /// @builtin(lhs)
-        /// lhs is TokenList.Index
+        /// lhs is [TokenList.Index]
         attr_builtin,
         /// @workgroup_size(lhs, rhs.y, rhs.z)
-        /// lhs is Expr
+        /// lhs is an expression
         /// rhs is WorkgroupSize [Optional]
         attr_workgroup_size,
         /// @workgroup(lhs, rhs)
@@ -153,66 +156,86 @@ pub const Node = struct {
         /// rhs is InterpolationSample [TokenList.Index] [Optional]
         attr_interpolate,
 
-        // ********* Operators *********
-        // main_token is operator
+        // ********* Expressions *********
         /// lhs * rhs
+        /// main_token is *
         mul,
         /// lhs / rhs
+        /// main_token is /
         div,
         /// lhs % rhs
+        /// main_token is %
         mod,
         /// lhs + rhs
+        /// main_token +
         add,
         /// lhs - rhs
+        /// main_token -
         sub,
         /// lhs << rhs
+        /// main_token <<
         shift_left,
         /// lhs >> rhs
+        /// main_token >>
         shift_right,
         /// lhs & rhs
+        /// main_token &
         binary_and,
         /// lhs | rhs
+        /// main_token |
         binary_or,
         /// lhs ^ rhs
+        /// main_token ^
         binary_xor,
         /// lhs && rhs
+        /// main_token &&
         circuit_and,
         /// lhs || rhs
+        /// main_token ||
         circuit_or,
         /// !lhs
+        /// main_token !
         not,
         /// -lhs
+        /// main_token -
         negate,
         /// *lhs
+        /// main_token *
         deref,
         /// &lhs
+        /// main_token &
         addr_of,
         /// lhs == rhs
+        /// main_token ==
         equal,
         /// lhs != rhs
+        /// main_token !=
         not_equal,
         /// lhs < rhs
+        /// main_token <
         less,
         /// lhs <= rhs
+        /// main_token <=
         less_equal,
-        /// lhs >= rhs
+        /// lhs > rhs
+        /// main_token >
         greater,
         /// lhs >= rhs
+        /// main_token >=
         greater_equal,
-
-        // ********* Expressions *********
         /// vec2<f32>(2)
-        /// main_token is identifier, 'array', ScalarType, VectorPrefix or MatrixPrefix.
-        /// lhs is constructor type [Optional]
-        /// rhs is ArgumentExprList
+        /// main_token is an identifier or
+        /// type constructor ('array', ScalarType, VectorPrefix or MatrixPrefix).
+        ///
+        /// lhs is TypeSpecifierWithoutIdent [Optional]
+        /// rhs is arguments (expression span)
         call_expr,
         /// bitcast<f32>(5)
         /// main_token is 'bitcast'
         /// lhs is destination type
-        /// rhs is Expr
+        /// rhs is an expression
         bitcast_expr,
-        /// some_ident
-        /// main_token is identifier
+        /// main_token is an identifier
         ident_expr,
 
         // ********* Literals *********

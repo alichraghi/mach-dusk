@@ -14,7 +14,6 @@ ast: Ast,
 error_file: std.fs.File,
 failed: bool = false,
 
-/// TODO: TypeAliasDecl        SEMICOLON
 /// TODO: StructDecl
 /// TODO: FunctionDecl
 /// TODO: ConstAssertStatement SEMICOLON
@@ -32,6 +31,9 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
         _ = try p.expectToken(.semicolon);
         return node;
     } else if (try p.typeAliasDecl()) |node| {
+        _ = try p.expectToken(.semicolon);
+        return node;
+    } else if (try p.constAssert()) |node| {
         _ = try p.expectToken(.semicolon);
         return node;
     }
@@ -384,18 +386,23 @@ pub fn typeAliasDecl(p: *Parser) !?Ast.Node.Index {
 //     };
 // }
 
-// pub fn constAssert(p: *Parser) !?Ast.Node.Index(Ast.Expression) {
-//     _ = p.eatToken(.keyword_const_assert) orelse return null;
-//     return try p.expression() orelse {
-//         p.addError(
-//             p.ast.tokens.peek(0).loc,
-//             "expected expression, found '{s}'",
-//             .{p.ast.tokens.peek(0).tag.symbol()},
-//             &.{},
-//         );
-//         return error.Parsing;
-//     };
-// }
+pub fn constAssert(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_const_assert) orelse return null;
+    const expr = try p.expression() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected expression, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+    return try p.addNode(.{
+        .tag = .const_assert,
+        .main_token = main_token,
+        .lhs = expr,
+    });
+}
 
 // /// FunctionDecl : Attribute* FN IDENT LEFT_PAREN ParameterList RIGHT_PAREN (ARROW FunctionResult)?
 // pub fn functionDecl(p: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Function {

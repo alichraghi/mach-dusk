@@ -14,7 +14,6 @@ ast: Ast,
 error_file: std.fs.File,
 failed: bool = false,
 
-/// TODO: GlobalOverrideDecl   SEMICOLON
 /// TODO: TypeAliasDecl        SEMICOLON
 /// TODO: StructDecl
 /// TODO: FunctionDecl
@@ -32,14 +31,11 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
     } else if (try p.globalConstDecl()) |node| {
         _ = try p.expectToken(.semicolon);
         return node;
+    } else if (try p.typeAliasDecl()) |node| {
+        _ = try p.expectToken(.semicolon);
+        return node;
     }
-    // } else if (try p.typeAliasDecl()) |type_alias| {
-    //     try p.addGlobal(.{ .type_alias = type_alias });
-    //     _ = try p.expectToken(.semicolon);
-    // } else if (try p.globalOverrideDecl(attrs)) |override| {
-    //     try p.addGlobal(.{ .override = override });
-    //     _ = try p.expectToken(.semicolon);
-    // } else if (try p.structDecl()) |strct| {
+    // else if (try p.structDecl()) |strct| {
     //     try p.addGlobal(.{ .@"struct" = strct });
     // } else if (try p.constAssert()) |assert| {
     //     try p.addGlobal(.{ .const_assert = assert });
@@ -329,6 +325,18 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     });
 }
 
+pub fn typeAliasDecl(p: *Parser) !?Ast.Node.Index {
+    const type_token = p.eatToken(.keyword_type) orelse return null;
+    _ = try p.expectToken(.ident);
+    _ = try p.expectToken(.equal);
+    const value = try p.expectTypeSpecifier();
+    return try p.addNode(.{
+        .tag = .type_alias,
+        .main_token = type_token,
+        .lhs = value,
+    });
+}
+
 // /// StructDecl : STRUCT IDENT BRACE_LEFT StructMember (COMMA StructMember)* COMMA? BRACE_RIGHT
 // pub fn structDecl(p: *Parser) !?Ast.Struct {
 //     if (p.eatToken(.keyword_struct) == null) return null;
@@ -612,18 +620,6 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
 //         .type = param_type,
 //         .attrs = attrs,
 //     };
-// }
-
-// /// TypeAliasDecl : TYPE IDENT EQUAL TypeSpecifier
-// pub fn typeAliasDecl(p: *Parser) !?Ast.TypeAlias {
-//     if (p.ast.tokens.peek(0).tag != .keyword_type) return null;
-//     _ = p.ast.tokens.advance();
-
-//     const name = try p.expectToken(.ident);
-//     _ = try p.expectToken(.equal);
-//     const value = try p.expectTypeSpecifier();
-
-//     return .{ .name = name.loc.asStr(p.source), .type = value };
 // }
 
 // /// VariableStatement

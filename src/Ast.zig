@@ -99,6 +99,9 @@ pub const Node = struct {
         /// lhs is GlobalOverrideDecl
         /// rhs is initializer
         global_override,
+        /// main_token is 'type'
+        /// lhs is a type
+        type_alias,
 
         // ********* Types *********
         /// main_token is ScalarType

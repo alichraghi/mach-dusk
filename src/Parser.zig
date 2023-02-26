@@ -14,38 +14,106 @@ ast: Ast,
 error_file: std.fs.File,
 failed: bool = false,
 
-/// TODO: StructDecl
-/// TODO: FunctionDecl
-/// TODO: ConstAssertStatement SEMICOLON
+fn findNextGlobal(p: *Parser) void {
+    var level: TokenList.Index = 0;
+    while (true) {
+        switch (p.ast.tokens.peek(0).tag) {
+            .keyword_fn,
+            .keyword_var,
+            .keyword_const,
+            .keyword_override,
+            .keyword_struct,
+            .attr,
+            => {
+                if (level == 0) return;
+            },
+            .semicolon => {
+                if (level == 0) {
+                    _ = p.ast.tokens.advance();
+                    return;
+                }
+            },
+            .brace_left,
+            .bracket_left,
+            .paren_left,
+            => {
+                level += 1;
+            },
+            .brace_right => {
+                if (level == 0) {
+                    _ = p.ast.tokens.advance();
+                    return;
+                }
+                level -= 1;
+            },
+            .bracket_right, .paren_right => {
+                if (level != 0) level -= 1;
+            },
+            .eof => return,
+            else => {},
+        }
+        _ = p.ast.tokens.advance();
+    }
+}
+
+fn findNextStmt(p: *Parser) void {
+    var level: TokenList.Index = 0;
+    while (true) {
+        switch (p.ast.tokens.peek(0).tag) {
+            .semicolon => {
+                if (level == 0) {
+                    _ = p.ast.tokens.advance();
+                    return;
+                }
+            },
+            .brace_left => {
+                level += 1;
+            },
+            .brace_right => {
+                if (level == 0) {
+                    _ = p.ast.tokens.advance();
+                    return;
+                }
+                level -= 1;
+            },
+            .eof => return,
+            else => {},
+        }
+        _ = p.ast.tokens.advance();
+    }
+}
+
+pub fn expectGlobalDeclRecoverable(p: *Parser) !?Ast.Node.Index {
+    return p.expectGlobalDecl() catch |err| switch (err) {
+        error.Parsing => {
+            p.findNextGlobal();
+            return null;
+        },
+        else => return err,
+    };
+}
+
 pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
     while (p.eatToken(.semicolon)) |_| {}
 
     const attrs = try p.attributeList();
-    if (try p.globalVarDecl(attrs)) |node| {
-        _ = try p.expectToken(.semicolon);
-        return node;
-    } else if (try p.globalOverrideDecl(attrs)) |node| {
-        _ = try p.expectToken(.semicolon);
-        return node;
-    } else if (try p.globalConstDecl()) |node| {
-        _ = try p.expectToken(.semicolon);
-        return node;
-    } else if (try p.typeAliasDecl()) |node| {
-        _ = try p.expectToken(.semicolon);
-        return node;
-    } else if (try p.constAssert()) |node| {
-        _ = try p.expectToken(.semicolon);
-        return node;
-    } else if (try p.structDecl()) |node| {
+
+    if (try p.structDecl() orelse
+        try p.functionDecl(attrs)) |node|
+    {
         return node;
     }
-    // else if (try p.structDecl()) |strct| {
-    //     try p.addGlobal(.{ .@"struct" = strct });
-    // } else if (try p.constAssert()) |assert| {
-    //     try p.addGlobal(.{ .const_assert = assert });
-    //     _ = try p.expectToken(.semicolon);
-    // } else if (try p.functionDecl(attrs)) |func| {
-    //     try p.addGlobal(.{ .function = func });
+
+    // decl SEMICOLON
+    if (try p.globalConstDecl() orelse
+        try p.typeAliasDecl() orelse
+        try p.constAssert() orelse
+        try p.globalVarDecl(attrs) orelse
+        try p.globalOverrideDecl(attrs)) |node|
+    {
+        _ = try p.expectToken(.semicolon);
+        return node;
+    }
 
     p.addError(
         p.ast.tokens.peek(0).loc,
@@ -408,156 +476,252 @@ pub fn constAssert(p: *Parser) !?Ast.Node.Index {
     });
 }
 
-// /// FunctionDecl : Attribute* FN IDENT LEFT_PAREN ParameterList RIGHT_PAREN (ARROW FunctionResult)?
-// pub fn functionDecl(p: *Parser, attrs: ?Ast.Range(Ast.Attribute)) !?Ast.Function {
-//     if (p.eatToken(.keyword_fn) == null) return null;
+pub fn functionDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
+    const fn_token = p.eatToken(.keyword_fn) orelse return null;
+    _ = try p.expectToken(.ident);
 
-//     const name = try p.expectToken(.ident);
+    _ = try p.expectToken(.paren_left);
+    const params = try p.expectParameterList();
+    _ = try p.expectToken(.paren_right);
 
-//     _ = try p.expectToken(.paren_left);
-//     const params = try p.expectParameterList();
-//     errdefer p.allocator.free(params);
-//     _ = try p.expectToken(.paren_right);
+    var result_attrs = null_index;
+    var result_type = null_index;
+    if (p.eatToken(.arrow)) |_| {
+        result_attrs = try p.attributeList() orelse null_index;
+        result_type = try p.expectTypeSpecifier();
+    }
 
-//     const result = if (p.eatToken(.arrow)) |_|
-//         try p.expectFunctionResult()
-//     else
-//         null;
+    const body = try p.block() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected function body, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
 
-//     const body = try p.block() orelse {
-//         p.addError(
-//             p.ast.tokens.peek(0).loc,
-//             "expected function body, found '{s}'",
-//             .{p.ast.tokens.peek(0).tag.symbol()},
-//             &.{},
-//         );
-//         return error.Parsing;
-//     };
+    const fn_proto = try p.addExtra(Ast.Node.FnProto{
+        .attrs = attrs orelse null_index,
+        .params = params,
+        .result_attrs = result_attrs,
+        .result_type = result_type,
+    });
+    return try p.addNode(.{
+        .tag = .fn_decl,
+        .main_token = fn_token,
+        .lhs = fn_proto,
+        .rhs = body,
+    });
+}
 
-//     return .{
-//         .name = name.loc.asStr(p.source),
-//         .params = params,
-//         .attrs = attrs,
-//         .result = result,
-//         .body = body,
-//     };
-// }
+/// ParameterList : Parameter (COMMA Param)* COMMA?
+pub fn expectParameterList(p: *Parser) !Ast.Node.Index {
+    const scratch_top = p.ast.scratch.items.len;
+    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    while (true) {
+        const attrs = try p.attributeList();
+        const param = try p.parameter(attrs) orelse {
+            if (attrs != null) {
+                p.addError(
+                    p.ast.tokens.peek(0).loc,
+                    "expected function parameter, found '{s}'",
+                    .{p.ast.tokens.peek(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            }
+            break;
+        };
+        try p.ast.scratch.append(p.allocator, param);
+        if (p.eatToken(.comma) == null) break;
+    }
+    const list = p.ast.scratch.items[scratch_top..];
+    return try p.listToSpan(list);
+}
 
-// /// FunctionResult : Attribute* TypeSpecifier
-// pub fn expectFunctionResult(p: *Parser) !Ast.Function.Result {
-//     const attrs = try p.attributeList();
-//     const return_type = try p.expectTypeSpecifier();
-//     return .{ .attrs = attrs, .type = return_type };
-// }
+pub fn parameter(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
+    const main_token = p.eatToken(.ident) orelse return null;
+    _ = try p.expectToken(.colon);
+    const param_type = try p.expectTypeSpecifier();
+    return try p.addNode(.{
+        .tag = .fn_param,
+        .main_token = main_token,
+        .lhs = attrs orelse null_index,
+        .rhs = param_type,
+    });
+}
 
-// /// Block : BRACE_LEFT Statement* BRACE_RIGHT
-// pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Block {
-//     _ = p.eatToken(.brace_left) orelse return null;
-//     const stmnt_list = try p.statementList() orelse return null;
-//     _ = try p.expectToken(.brace_right);
-//     return stmnt_list;
-// }
+pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
+    _ = p.eatToken(.brace_left) orelse return null;
 
-// /// Statement
-// ///   : SEMICOLON
-// ///   | ReturnStatement           SEMICOLON
-// ///   | IfStatement                            TODO
-// ///   | SwitchStatement                        TODO
-// ///   | LoopStatement
-// ///   | ForStatement                           TODO
-// ///   | WhileStatement                         TODO
-// ///   | FuncCallStatement         SEMICOLON    TODO
-// ///   | VariableStatement         SEMICOLON    TODO
-// ///   | BreakStatement            SEMICOLON
-// ///   | BreakIfStatement          SEMICOLON
-// ///   | ContinuingStatement
-// ///   | ContinueStatement         SEMICOLON
-// ///   | DiscardStatement          SEMICOLON
-// ///   | VariableUpdatingStatement SEMICOLON    TODO
-// ///   | CompoundStatement                      TODO
-// ///   | ConstAssertStatement      SEMICOLON
-// ///
-// /// for simplicity and better error messages,
-// /// we are putting all statements here
-// pub fn statement(p: *Parser) !?Ast.Statement {
-//     while (p.eatToken(.semicolon)) |_| {}
+    const scratch_top = p.ast.scratch.items.len;
+    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
 
-//     if (try p.returnStatement()) |expr| {
-//         _ = try p.expectToken(.semicolon);
-//         return .{ .@"return" = expr };
-//     } else if (try p.loopStatement()) |blk| {
-//         return .{ .loop = blk };
-//     } else if (try p.continuingStatement()) |blk| {
-//         return .{ .continuing = blk };
-//     } else if (try p.breakIfStatement()) |expr| {
-//         _ = try p.expectToken(.semicolon);
-//         return .{ .break_if = expr };
-//     } else if (try p.breakStatement()) |_| {
-//         _ = try p.expectToken(.semicolon);
-//         return .@"break";
-//     } else if (try p.discardStatement()) |_| {
-//         _ = try p.expectToken(.semicolon);
-//         return .discard;
-//     } else if (try p.continueStatement()) |_| {
-//         _ = try p.expectToken(.semicolon);
-//         return .@"continue";
-//     } else if (try p.constAssert()) |expr| {
-//         _ = try p.expectToken(.semicolon);
-//         return .{ .const_assert = expr };
-//     }
+    var failed = false;
+    while (true) {
+        const stmt = try p.statementRecoverable() orelse {
+            if (p.ast.tokens.peek(0).tag == .brace_right) break;
+            failed = true;
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected statement, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            p.findNextStmt();
+            continue;
+        };
+        try p.ast.scratch.append(p.allocator, stmt);
+    }
+    _ = try p.expectToken(.brace_right);
+    if (failed) return error.Parsing;
 
-//     return null;
-// }
+    const list = p.ast.scratch.items[scratch_top..];
+    return try p.listToSpan(list);
+}
 
-// /// ReturnStatement : RETURN Expr?
-// pub fn returnStatement(p: *Parser) !?Ast.Statement.Return {
-//     if (p.eatToken(.keyword_return) == null) return null;
-//     return if (try p.expression()) |expr| .{ .expr = expr } else .void;
-// }
+pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
+    return try p.block() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected block statement, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+}
 
-// /// DiscardStatement : DISCARD
-// pub fn discardStatement(p: *Parser) !?void {
-//     if (p.eatToken(.keyword_discard) == null) return null;
-// }
+/// Statement
+///   | IfStatement                            TODO
+///   | SwitchStatement                        TODO
+///   | ForStatement                           TODO
+///   | WhileStatement                         TODO
+///   | FuncCallStatement         SEMICOLON    TODO
+///   | VariableStatement         SEMICOLON    TODO
+///   | BreakStatement            SEMICOLON
+///   | ContinueStatement         SEMICOLON
+///   | VariableUpdatingStatement SEMICOLON    TODO
+///   | ConstAssertStatement      SEMICOLON
+///
+/// for simplicity and better error messages,
+/// we are putting all statements here
+pub fn statement(p: *Parser) !?Ast.Node.Index {
+    while (p.eatToken(.semicolon)) |_| {}
 
-// /// LoopStatement : LOOP Block
-// pub fn loopStatement(p: *Parser) !?Ast.Block {
-//     if (p.eatToken(.keyword_loop) == null) return null;
-//     return p.block();
-// }
+    if (try p.returnStatement() orelse
+        try p.discardStatement() orelse
+        try p.breakIfStatement() orelse
+        try p.breakStatement() orelse
+        try p.continueStatement() orelse
+        try p.constAssert()) |node|
+    {
+        _ = try p.expectToken(.semicolon);
+        return node;
+    }
 
-// /// ContinuingStatement : continuing Block
-// pub fn continuingStatement(p: *Parser) !?Ast.Block {
-//     if (p.eatToken(.keyword_continuing) == null) return null;
-//     return p.block();
-// }
+    if (try p.loopStatement() orelse
+        try p.continuingStatement() orelse
+        try p.block()) |node|
+    {
+        return node;
+    }
 
-// /// BreakIfStatement : BREAK IF Expr
-// pub fn breakIfStatement(p: *Parser) !?Ast.Node.Index(Ast.Expression) {
-//     if (p.ast.tokens.peek(0).tag == .keyword_break and p.peek().tag == .keyword_if) {
-//         _ = p.ast.tokens.advance();
-//         _ = p.ast.tokens.advance();
-//         return p.expression();
-//     }
-//     return null;
-// }
+    return null;
+}
 
-// /// BreakStatement : BREAK
-// pub fn breakStatement(p: *Parser) !?void {
-//     if (p.eatToken(.keyword_break) == null) return null;
-// }
+pub fn statementRecoverable(p: *Parser) !?Ast.Node.Index {
+    while (true) {
+        return p.statement() catch |err| switch (err) {
+            error.Parsing => {
+                p.findNextStmt();
+                switch (p.ast.tokens.peek(0).tag) {
+                    .brace_right => return null,
+                    .eof => return error.Parsing,
+                    else => continue,
+                }
+            },
+            else => return err,
+        };
+    }
+}
 
-// /// ContinueStatement : CONTINUE
-// pub fn continueStatement(p: *Parser) !?void {
-//     if (p.eatToken(.keyword_continue) == null) return null;
-// }
+pub fn returnStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_return) orelse return null;
+    const expr = try p.expression() orelse Ast.null_index;
+    return try p.addNode(.{
+        .tag = .return_statement,
+        .main_token = main_token,
+        .lhs = expr,
+    });
+}
+
+pub fn discardStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_discard) orelse return null;
+    return try p.addNode(.{ .tag = .discard_statement, .main_token = main_token });
+}
+
+pub fn breakStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_break) orelse return null;
+    return try p.addNode(.{ .tag = .break_statement, .main_token = main_token });
+}
+
+pub fn continueStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_continue) orelse return null;
+    return try p.addNode(.{ .tag = .continue_statement, .main_token = main_token });
+}
+
+pub fn loopStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_loop) orelse return null;
+    const body = try p.expectBlock();
+    return try p.addNode(.{
+        .tag = .loop_statement,
+        .main_token = main_token,
+        .lhs = body,
+    });
+}
+
+pub fn continuingStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_continuing) orelse return null;
+    const body = try p.expectBlock();
+    return try p.addNode(.{
+        .tag = .continuing_statement,
+        .main_token = main_token,
+        .lhs = body,
+    });
+}
+
+pub fn breakIfStatement(p: *Parser) !?Ast.Node.Index {
+    if (p.ast.tokens.peek(0).tag == .keyword_break and
+        p.ast.tokens.peek(1).tag == .keyword_if)
+    {
+        const main_token = p.ast.tokens.advance();
+        _ = p.ast.tokens.advance();
+        const cond = try p.expression() orelse {
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected condition expression, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+        return try p.addNode(.{
+            .tag = .break_if_statement,
+            .main_token = main_token,
+            .lhs = cond,
+        });
+    }
+    return null;
+}
 
 /// IfStatement : IF EXpr Block (ELSE IF Expr Block)* ELSE Block?
 // pub fn ifStatement(p: *Parser) !?void {
 //     if (p.eatToken(.keyword_if) == null) return null;
 
-//     var stmnts = std.ArrayList(Ast.Statement).init(p.allocator);
-//     defer stmnts.deinit();
+//     var stmts = std.ArrayList(Ast.Statement).init(p.allocator);
+//     defer stmts.deinit();
 //     while (true) {
 //         const cond = p.expression() orelse {
 //             p.addError(
@@ -577,60 +741,10 @@ pub fn constAssert(p: *Parser) !?Ast.Node.Index {
 //             );
 //             return error.Parsing;
 //         };
-//         try stmnts.append(.{ .cond = cond, .payload = payload });
+//         try stmts.append(.{ .cond = cond, .payload = payload });
 
 //         if (p.eatToken(.@"else")) |_| {}
 //     }
-// }
-
-/// StatementList : Statement*
-// pub fn statementList(p: *Parser) !?Ast.Block {
-//     var stmnts = std.ArrayList(Ast.Statement).init(p.allocator);
-//     defer stmnts.deinit();
-//     while (try p.statement()) |stmnt| {
-//         try stmnts.append(stmnt);
-//     }
-//     return try p.addStmntSlice(stmnts.items);
-// }
-
-// /// ParameterList : Parameter (COMMA Param)* COMMA?
-// pub fn expectParameterList(p: *Parser) ![]const Ast.Function.Param {
-//     var params = std.ArrayList(Ast.Function.Param).init(p.allocator);
-//     errdefer params.deinit();
-
-//     while (true) {
-//         const param_token = p.ast.tokens.peek(0);
-//         const param = try p.parameter() orelse break;
-//         if (params.items.len > max_call_args) {
-//             p.addError(
-//                 param_token.loc,
-//                 "exceeded maximum function parameters ({})",
-//                 .{max_call_args},
-//                 &.{},
-//             );
-//             return error.Parsing;
-//         }
-//         try params.append(param);
-//         if (p.eatToken(.comma) == null) break;
-//     }
-
-//     return params.toOwnedSlice();
-// }
-
-// /// Parameter : Attribute* IDENT COLON TypeSpecifier
-// pub fn parameter(p: *Parser) !?Ast.Function.Param {
-//     const attrs = try p.attributeList();
-//     const name = if (attrs == null)
-//         p.eatToken(.ident) orelse return null
-//     else
-//         try p.expectToken(.ident);
-//     _ = try p.expectToken(.colon);
-//     const param_type = try p.expectTypeSpecifier();
-//     return .{
-//         .name = name.loc.asStr(p.source),
-//         .type = param_type,
-//         .attrs = attrs,
-//     };
 // }
 
 // /// VariableStatement
@@ -846,6 +960,7 @@ pub fn expectAccessMode(p: *Parser) !TokenList.Index {
 
 pub fn primaryExpr(p: *Parser) !?Ast.Node.Index {
     const main_token = p.ast.tokens.index;
+    if (try p.callExpr()) |call| return call;
     switch (p.ast.tokens.get(main_token).tag) {
         .keyword_true, .keyword_false => {
             _ = p.ast.tokens.advance();
@@ -874,7 +989,6 @@ pub fn primaryExpr(p: *Parser) !?Ast.Node.Index {
             return try p.addNode(.{ .tag = .ident_expr, .main_token = main_token });
         },
         else => {
-            if (try p.callExpr()) |call| return call;
             return null;
         },
     }

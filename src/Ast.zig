@@ -37,28 +37,25 @@ pub fn parse(
     const estimated_nodes = (p.ast.tokens.list.len + 2) / 2;
     try p.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
 
-    _ = p.addNode(.{
+    const root = p.addNode(.{
         .tag = .translation_unit,
-        .main_token = 0,
+        .main_token = undefined,
     }) catch unreachable;
 
     const scratch_top = p.ast.scratch.items.len;
     defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
 
     while (p.ast.tokens.peek(0).tag != .eof) {
-        const decl = p.expectGlobalDecl() catch |err| {
-            if (err == error.Parsing) {
-                p.ast.tokens.advanceUntil(.semicolon);
-                continue;
-            } else return err;
-        };
+        const decl = try p.expectGlobalDeclRecoverable() orelse continue;
         try p.ast.scratch.append(allocator, decl);
     }
 
+    if (p.failed) return error.Parsing;
+
     const list = p.ast.scratch.items[scratch_top..];
     try p.ast.extra_data.appendSlice(allocator, list);
-    p.ast.nodes.items(.lhs)[0] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
-    p.ast.nodes.items(.rhs)[0] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
+    p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
+    p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
 
     return p.ast;
 }
@@ -112,6 +109,34 @@ pub const Node = struct {
         /// lhs is attributes span
         /// rhs is type
         struct_member,
+        /// main_token is 'fn'
+        /// lhs is FnProto
+        /// rhs is body
+        fn_decl,
+        /// main_token is param name
+        /// lhs is Attributes [Optional]
+        /// rhs is type
+        fn_param,
+
+        // ********* Statements *********
+        /// main_token is 'return'
+        /// lhs is expression [Optional]
+        return_statement,
+        /// main_token is 'discard'
+        discard_statement,
+        /// main_token is 'loop'
+        /// lhs is body block
+        loop_statement,
+        /// main_token is 'continuing'
+        /// lhs is body block
+        continuing_statement,
+        /// main_token is 'break'
+        /// lhs is condition expression
+        break_if_statement,
+        /// main_token is 'break'
+        break_statement,
+        /// main_token is 'continue'
+        continue_statement,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -252,11 +277,6 @@ pub const Node = struct {
         number_literal,
     };
 
-    pub const PtrType = struct {
-        addr_space: TokenList.Index,
-        access_mode: TokenList.Index = null_index,
-    };
-
     pub const GlobalVarDecl = struct {
         attrs: Index = null_index,
         addr_space: TokenList.Index = null_index,
@@ -269,9 +289,21 @@ pub const Node = struct {
         type: Index = null_index,
     };
 
+    pub const PtrType = struct {
+        addr_space: TokenList.Index,
+        access_mode: TokenList.Index = null_index,
+    };
+
     pub const WorkgroupSize = struct {
         y: Index,
         z: Index = null_index,
+    };
+
+    pub const FnProto = struct {
+        attrs: Index = null_index,
+        params: Index = null_index,
+        result_attrs: Index = null_index,
+        result_type: Index = null_index,
     };
 };
 
@@ -340,11 +372,46 @@ test Parser {
     std.testing.refAllDeclsRecursive(Parser);
 }
 
+test "empty" {
+    const source = "";
+    var ast = try parse(std.testing.allocator, source, null);
+    defer ast.deinit(std.testing.allocator);
+}
+
 test "no errors" {
     const source =
-        \\;
-        \\const expr = 5;
-        \\@interpolate(flat) var<storage> expr = (1 + 5) | 6;
+        \\//;
+        \\//@interpolate(flat) @workgroup_size(1, 2,) var expr = vec3<f32>(1, 5);
+        \\//var<storage> expr = bitcast<f32>(5);
+        \\//var expr;
+        \\//var expr = bool();
+        \\//var expr = ~(-(!false));
+        \\//var expr = expr;
+        \\//var expr = expr(expr);
+        \\//const hello = 1;
+        \\//override hello;
+        \\//type the_type = ptr<workgroup, f32, read>;
+        \\//type the_type = array<f32, expr>;
+        \\//type the_type = vec3<f32>;
+        \\//type the_type = mat2x3<f32>;
+        \\//type the_type = atomic<u32>;
+        \\//type the_type = sampler;
+        \\//struct S {
+        \\//  s: u32,
+        \\//}
+        \\//const_assert 2 > 1;
+        \\fn foo(f: u32) -> u32 {
+        \\    loop {
+        \\        continuing {
+        \\            continue;
+        \\            break;
+        \\            break if true;
+        \\        }
+        \\        return bar;
+        \\        return;
+        \\        const_assert 2 > 1;
+        \\    }
+        \\}
     ** 1;
 
     var ast = try parse(std.testing.allocator, source, null);

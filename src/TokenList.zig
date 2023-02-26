@@ -27,4 +27,5 @@ pub fn advanceUntil(self: *TokenList, until: Token.Tag) void {
         if (tag == until or tag == .eof) break;
         _ = self.advance();
     }
+    _ = self.advance();
 }

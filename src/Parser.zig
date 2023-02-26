@@ -12,6 +12,7 @@ allocator: std.mem.Allocator,
 source: [:0]const u8,
 ast: Ast,
 error_file: std.fs.File,
+scratch: std.ArrayListUnmanaged(Ast.Node.Index) = .{},
 failed: bool = false,
 
 fn findNextGlobal(p: *Parser) void {
@@ -125,13 +126,13 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Node.Index {
 }
 
 pub fn attributeList(p: *Parser) !?Ast.Node.Index {
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
         const attr = try p.attribute() orelse break;
-        try p.ast.scratch.append(p.allocator, attr);
+        try p.scratch.append(p.allocator, attr);
     }
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     if (list.len == 0) return null;
     return try p.listToSpan(list);
 }
@@ -414,8 +415,8 @@ pub fn structDecl(p: *Parser) !?Ast.Node.Index {
     _ = try p.expectToken(.ident);
     _ = try p.expectToken(.brace_left);
 
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
         const attrs = try p.attributeList();
         const member = try p.structMember(attrs) orelse {
@@ -430,13 +431,13 @@ pub fn structDecl(p: *Parser) !?Ast.Node.Index {
             }
             break;
         };
-        try p.ast.scratch.append(p.allocator, member);
+        try p.scratch.append(p.allocator, member);
         _ = p.eatToken(.comma);
     }
 
     _ = try p.expectToken(.brace_right);
 
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     const members = try p.listToSpan(list);
 
     return try p.addNode(.{
@@ -517,8 +518,8 @@ pub fn functionDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
 
 /// ParameterList : Parameter (COMMA Param)* COMMA?
 pub fn expectParameterList(p: *Parser) !Ast.Node.Index {
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
         const attrs = try p.attributeList();
         const param = try p.parameter(attrs) orelse {
@@ -533,10 +534,10 @@ pub fn expectParameterList(p: *Parser) !Ast.Node.Index {
             }
             break;
         };
-        try p.ast.scratch.append(p.allocator, param);
+        try p.scratch.append(p.allocator, param);
         if (p.eatToken(.comma) == null) break;
     }
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     return try p.listToSpan(list);
 }
 
@@ -555,8 +556,8 @@ pub fn parameter(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
 pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
     _ = p.eatToken(.brace_left) orelse return null;
 
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
     var failed = false;
     while (true) {
@@ -572,12 +573,12 @@ pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
             p.findNextStmt();
             continue;
         };
-        try p.ast.scratch.append(p.allocator, stmt);
+        try p.scratch.append(p.allocator, stmt);
     }
     _ = try p.expectToken(.brace_right);
     if (failed) return error.Parsing;
 
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     return try p.listToSpan(list);
 }
 
@@ -1058,17 +1059,17 @@ pub fn callExpr(p: *Parser) !?Ast.Node.Index {
 pub fn expectArgumentExprList(p: *Parser) !Ast.Node.Index {
     _ = try p.expectToken(.paren_left);
 
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
         const expr = try p.expression() orelse break;
-        try p.ast.scratch.append(p.allocator, expr);
+        try p.scratch.append(p.allocator, expr);
         if (p.eatToken(.comma) == null) break;
     }
 
     _ = try p.expectToken(.paren_right);
 
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     return p.listToSpan(list);
 }
 

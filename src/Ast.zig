@@ -8,7 +8,6 @@ const Ast = @This();
 
 nodes: std.MultiArrayList(Node) = .{},
 extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
-scratch: std.ArrayListUnmanaged(Node.Index) = .{},
 tokens: TokenList,
 
 /// parses a TranslationUnit(WGSL Program)
@@ -32,6 +31,7 @@ pub fn parse(
         .ast = .{ .tokens = .{ .list = try tokens.toOwnedSlice() } },
         .error_file = error_file orelse std.io.getStdErr(),
     };
+    defer p.scratch.deinit(allocator);
     errdefer p.ast.deinit(allocator);
 
     const estimated_nodes = (p.ast.tokens.list.len + 2) / 2;
@@ -42,17 +42,17 @@ pub fn parse(
         .main_token = undefined,
     }) catch unreachable;
 
-    const scratch_top = p.ast.scratch.items.len;
-    defer p.ast.scratch.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
     while (p.ast.tokens.peek(0).tag != .eof) {
         const decl = try p.expectGlobalDeclRecoverable() orelse continue;
-        try p.ast.scratch.append(allocator, decl);
+        try p.scratch.append(allocator, decl);
     }
 
     if (p.failed) return error.Parsing;
 
-    const list = p.ast.scratch.items[scratch_top..];
+    const list = p.scratch.items[scratch_top..];
     try p.ast.extra_data.appendSlice(allocator, list);
     p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
     p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
@@ -63,7 +63,6 @@ pub fn parse(
 pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
     self.nodes.deinit(allocator);
     self.extra_data.deinit(allocator);
-    self.scratch.deinit(allocator);
     allocator.free(self.tokens.list);
 }
 
@@ -380,26 +379,26 @@ test "empty" {
 
 test "no errors" {
     const source =
-        \\//;
-        \\//@interpolate(flat) @workgroup_size(1, 2,) var expr = vec3<f32>(1, 5);
-        \\//var<storage> expr = bitcast<f32>(5);
-        \\//var expr;
-        \\//var expr = bool();
-        \\//var expr = ~(-(!false));
-        \\//var expr = expr;
-        \\//var expr = expr(expr);
-        \\//const hello = 1;
-        \\//override hello;
-        \\//type the_type = ptr<workgroup, f32, read>;
-        \\//type the_type = array<f32, expr>;
-        \\//type the_type = vec3<f32>;
-        \\//type the_type = mat2x3<f32>;
-        \\//type the_type = atomic<u32>;
-        \\//type the_type = sampler;
-        \\//struct S {
-        \\//  s: u32,
-        \\//}
-        \\//const_assert 2 > 1;
+        \\;
+        \\@interpolate(flat) @workgroup_size(1, 2,) var expr = vec3<f32>(1, 5);
+        \\var<storage> expr = bitcast<f32>(5);
+        \\var expr;
+        \\var expr = bool();
+        \\var expr = ~(-(!false));
+        \\var expr = expr;
+        \\var expr = expr(expr);
+        \\const hello = 1;
+        \\override hello;
+        \\type the_type = ptr<workgroup, f32, read>;
+        \\type the_type = array<f32, expr>;
+        \\type the_type = vec3<f32>;
+        \\type the_type = mat2x3<f32>;
+        \\type the_type = atomic<u32>;
+        \\type the_type = sampler;
+        \\struct S {
+        \\  s: u32,
+        \\}
+        \\const_assert 2 > 1;
         \\fn foo(f: u32) -> u32 {
         \\    loop {
         \\        continuing {
@@ -414,8 +413,8 @@ test "no errors" {
         \\}
     ** 1;
 
-    var ast = try parse(std.testing.allocator, source, null);
-    defer ast.deinit(std.testing.allocator);
+    var ast = try parse(std.heap.c_allocator, source, null);
+    defer ast.deinit(std.heap.c_allocator);
 }
 
 // test "no errors" {

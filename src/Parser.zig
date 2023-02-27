@@ -594,7 +594,6 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
 }
 
 /// Statement
-///   | IfStatement                            TODO
 ///   | SwitchStatement                        TODO
 ///   | ForStatement                           TODO
 ///   | WhileStatement                         TODO
@@ -621,7 +620,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
     if (try p.loopStatement() orelse
         try p.continuingStatement() orelse
         try p.block() orelse
-        try p.ifStatement()) |node|
+        try p.ifStatement() orelse
+        try p.switchStatement()) |node|
     {
         return node;
     }
@@ -775,6 +775,72 @@ pub fn ifStatement(p: *Parser) !?Ast.Node.Index {
         .main_token = main_token,
         .lhs = cond,
         .rhs = body,
+    });
+}
+
+pub fn switchStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_switch) orelse return null;
+
+    const expr = try p.expression() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected condition expression, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+
+    _ = try p.expectToken(.brace_left);
+
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
+    while (true) {
+        if (p.eatToken(.keyword_default)) |default_token| {
+            _ = p.eatToken(.colon);
+            const default_body = try p.expectBlock();
+            try p.scratch.append(p.allocator, try p.addNode(.{
+                .tag = .switch_default,
+                .main_token = default_token,
+                .lhs = default_body,
+            }));
+        } else if (p.eatToken(.keyword_case)) |case_token| {
+            const cases_scratch_top = p.scratch.items.len;
+
+            var has_default = false;
+            while (true) {
+                const case_expr = try p.expression() orelse {
+                    if (p.eatToken(.keyword_default)) |_| continue;
+                    break;
+                };
+                _ = p.eatToken(.comma);
+                try p.scratch.append(p.allocator, case_expr);
+            }
+            const case_expr_list = p.scratch.items[cases_scratch_top..];
+
+            _ = p.eatToken(.colon);
+            const default_body = try p.expectBlock();
+
+            try p.scratch.append(p.allocator, try p.addNode(.{
+                .tag = if (has_default) .switch_case_default else .switch_case,
+                .main_token = case_token,
+                .lhs = try p.listToSpan(case_expr_list),
+                .rhs = default_body,
+            }));
+            p.scratch.shrinkRetainingCapacity(cases_scratch_top);
+        } else {
+            break;
+        }
+    }
+
+    _ = try p.expectToken(.brace_right);
+
+    const case_list = p.scratch.items[scratch_top..];
+    return try p.addNode(.{
+        .tag = .switch_statement,
+        .main_token = main_token,
+        .lhs = expr,
+        .rhs = try p.listToSpan(case_list),
     });
 }
 

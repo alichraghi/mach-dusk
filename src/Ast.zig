@@ -148,6 +148,24 @@ pub const Node = struct {
         /// lhs is IfStatement
         /// rhs is if_statement, if_else_statement or if_else_if_statement
         if_else_if_statement,
+        /// switch lhs { rhs }
+        /// main_token is 'switch'
+        /// lhs is expression
+        /// rhs is cases span
+        switch_statement,
+        /// main_token is 'default'
+        /// lhs is body block
+        switch_default,
+        /// case lhs { rhs }
+        /// main_token is 'case'
+        /// lhs is cases span
+        /// lhs is body block
+        switch_case,
+        /// case lhs, default { rhs }
+        /// main_token is 'case'
+        /// lhs is cases span
+        /// lhs is body block
+        switch_case_default,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -431,6 +449,18 @@ test "no errors" {
         \\      return 1;
         \\    } else {
         \\      return 1;
+        \\    }
+        \\    
+        \\    switch expr {
+        \\      default: {
+        \\        return 1;
+        \\      }
+        \\      case expr, 2, 3 {
+        \\        return 2;
+        \\      }
+        \\      case expr, default {
+        \\        return 3;
+        \\      }
         \\    }
         \\
         \\    loop {

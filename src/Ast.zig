@@ -463,6 +463,8 @@ test "no errors" {
         \\      }
         \\    }
         \\
+        \\    hello();
+        \\
         \\    loop {
         \\        continuing {
         \\            continue;

@@ -594,10 +594,8 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
 }
 
 /// Statement
-///   | SwitchStatement                        TODO
 ///   | ForStatement                           TODO
 ///   | WhileStatement                         TODO
-///   | FuncCallStatement         SEMICOLON    TODO
 ///   | VariableStatement         SEMICOLON    TODO
 ///   | VariableUpdatingStatement SEMICOLON    TODO
 ///
@@ -611,7 +609,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
         try p.breakIfStatement() orelse
         try p.breakStatement() orelse
         try p.continueStatement() orelse
-        try p.constAssert()) |node|
+        try p.constAssert() orelse
+        try p.callExpr()) |node|
     {
         _ = try p.expectToken(.semicolon);
         return node;

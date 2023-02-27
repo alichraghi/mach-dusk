@@ -3,3 +3,4 @@ zig-out/
 temp/
 c.c
 z.zig
+heaptrack*

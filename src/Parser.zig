@@ -516,7 +516,6 @@ pub fn functionDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     });
 }
 
-/// ParameterList : Parameter (COMMA Param)* COMMA?
 pub fn expectParameterList(p: *Parser) !Ast.Node.Index {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
@@ -601,10 +600,7 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
 ///   | WhileStatement                         TODO
 ///   | FuncCallStatement         SEMICOLON    TODO
 ///   | VariableStatement         SEMICOLON    TODO
-///   | BreakStatement            SEMICOLON
-///   | ContinueStatement         SEMICOLON
 ///   | VariableUpdatingStatement SEMICOLON    TODO
-///   | ConstAssertStatement      SEMICOLON
 ///
 /// for simplicity and better error messages,
 /// we are putting all statements here
@@ -624,7 +620,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
 
     if (try p.loopStatement() orelse
         try p.continuingStatement() orelse
-        try p.block()) |node|
+        try p.block() orelse
+        try p.ifStatement()) |node|
     {
         return node;
     }
@@ -717,36 +714,69 @@ pub fn breakIfStatement(p: *Parser) !?Ast.Node.Index {
     return null;
 }
 
-/// IfStatement : IF EXpr Block (ELSE IF Expr Block)* ELSE Block?
-// pub fn ifStatement(p: *Parser) !?void {
-//     if (p.eatToken(.keyword_if) == null) return null;
+pub fn ifStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_if) orelse return null;
 
-//     var stmts = std.ArrayList(Ast.Statement).init(p.allocator);
-//     defer stmts.deinit();
-//     while (true) {
-//         const cond = p.expression() orelse {
-//             p.addError(
-//                 p.ast.tokens.peek(0).loc,
-//                 "expected condition expression, found '{s}'",
-//                 .{p.ast.tokens.peek(0).tag.symbol()},
-//                 &.{},
-//             );
-//             return error.Parsing;
-//         };
-//         const payload = try p.block() orelse {
-//             p.addError(
-//                 p.ast.tokens.peek(0).loc,
-//                 "expected payload block, found '{s}'",
-//                 .{p.ast.tokens.peek(0).tag.symbol()},
-//                 &.{},
-//             );
-//             return error.Parsing;
-//         };
-//         try stmts.append(.{ .cond = cond, .payload = payload });
+    const cond = try p.expression() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected condition expression, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+    const body = try p.block() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected if body block, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
 
-//         if (p.eatToken(.@"else")) |_| {}
-//     }
-// }
+    if (p.eatToken(.keyword_else)) |_| {
+        const extra = try p.addExtra(Ast.Node.IfStatement{
+            .cond = cond,
+            .body = body,
+        });
+
+        if (p.ast.tokens.peek(0).tag == .keyword_if) {
+            const else_if = try p.ifStatement() orelse unreachable;
+            return try p.addNode(.{
+                .tag = .if_else_if_statement,
+                .main_token = main_token,
+                .lhs = extra,
+                .rhs = else_if,
+            });
+        }
+
+        const else_body = try p.block() orelse {
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected else body block, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+
+        return try p.addNode(.{
+            .tag = .if_else_statement,
+            .main_token = main_token,
+            .lhs = extra,
+            .rhs = else_body,
+        });
+    }
+
+    return try p.addNode(.{
+        .tag = .if_statement,
+        .main_token = main_token,
+        .lhs = cond,
+        .rhs = body,
+    });
+}
 
 // /// VariableStatement
 // ///   : VariableDecl                          TODO

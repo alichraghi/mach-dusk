@@ -136,6 +136,18 @@ pub const Node = struct {
         break_statement,
         /// main_token is 'continue'
         continue_statement,
+        /// main_token is 'if'
+        /// lhs is condition
+        /// rhs is body
+        if_statement,
+        /// main_token is 'if'
+        /// lhs is IfStatement
+        /// rhs is else body
+        if_else_statement,
+        /// main_token is 'if'
+        /// lhs is IfStatement
+        /// rhs is if_statement, if_else_statement or if_else_if_statement
+        if_else_if_statement,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -304,6 +316,11 @@ pub const Node = struct {
         result_attrs: Index = null_index,
         result_type: Index = null_index,
     };
+
+    pub const IfStatement = struct {
+        cond: Index,
+        body: Index,
+    };
 };
 
 pub const BuiltinValue = enum {
@@ -400,6 +417,22 @@ test "no errors" {
         \\}
         \\const_assert 2 > 1;
         \\fn foo(f: u32) -> u32 {
+        \\    if true {
+        \\      return 1;
+        \\    }
+        \\
+        \\    if true {
+        \\      return 1;
+        \\    } else if true {
+        \\      return 1;
+        \\    }
+        \\
+        \\    if true {
+        \\      return 1;
+        \\    } else {
+        \\      return 1;
+        \\    }
+        \\
         \\    loop {
         \\        continuing {
         \\            continue;
@@ -412,7 +445,6 @@ test "no errors" {
         \\    }
         \\}
     ** 1;
-
     var ast = try parse(std.heap.c_allocator, source, null);
     defer ast.deinit(std.heap.c_allocator);
 }

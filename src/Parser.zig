@@ -1358,8 +1358,39 @@ pub fn unaryExpr(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Node.Index {
 }
 
 pub fn singularExpr(p: *Parser) !?Ast.Node.Index {
-    return p.primaryExpr();
-    // TODO: component_or_swizzle_specifier
+    const prefix = try p.primaryExpr() orelse return null;
+    return try p.componentOrSwizzleSpecifier(prefix);
+}
+
+pub fn componentOrSwizzleSpecifier(p: *Parser, prefix: Ast.Node.Index) !Ast.Node.Index {
+    var prefix_result = prefix;
+    while (true) {
+        if (p.eatToken(.period)) |_| {
+            const member_token = try p.expectToken(.ident);
+            prefix_result = try p.addNode(.{
+                .tag = .component_access,
+                .main_token = member_token,
+                .lhs = prefix_result,
+            });
+        } else if (p.eatToken(.bracket_left)) |bracket_left_token| {
+            const index_expr = try p.expression() orelse {
+                p.addError(
+                    p.ast.tokens.peek(0).loc,
+                    "expected expression, but found '{s}'",
+                    .{p.ast.tokens.peek(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            };
+            _ = try p.expectToken(.bracket_right);
+            prefix_result = try p.addNode(.{
+                .tag = .index_access,
+                .main_token = bracket_left_token,
+                .lhs = prefix_result,
+                .rhs = index_expr,
+            });
+        } else return prefix_result;
+    }
 }
 
 pub fn expectMultiplicativeExpr(p: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node.Index {

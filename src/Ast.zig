@@ -328,6 +328,15 @@ pub const Node = struct {
         bitcast_expr,
         /// main_token is an identifier
         ident_expr,
+        /// lhs.some_ident
+        /// main_token is identifier
+        /// lhs is prefix expression
+        component_access,
+        /// lhs[rhs]
+        /// main_token is '['
+        /// lhs is prefix expression
+        /// rhs is expression
+        index_access,
 
         // ********* Literals *********
         /// main_token is 'true' or 'false'

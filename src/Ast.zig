@@ -328,6 +328,14 @@ pub const Node = struct {
         bitcast_expr,
         /// main_token is an identifier
         ident_expr,
+        /// *lhs
+        /// main_token is '*'
+        /// lhs is expression
+        deref_expr,
+        /// &lhs
+        /// main_token is '&'
+        /// lhs is expression
+        addr_of_expr,
         /// lhs.some_ident
         /// main_token is identifier
         /// lhs is prefix expression
@@ -473,7 +481,7 @@ test "no errors" {
         \\var expr = bool();
         \\var expr = ~(-(!false));
         \\var expr = expr;
-        \\var expr = expr(expr);
+        \\var expr = expr(expr[1].hello);
         \\const hello = 1;
         \\override hello;
         \\type the_type = ptr<workgroup, f32, read>;

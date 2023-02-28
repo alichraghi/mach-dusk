@@ -987,7 +987,7 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Node.Index {
             .main_token = equal_token,
             .lhs = expr,
         });
-    } else if (try p.expression()) |lhs| {
+    } else if (try p.lhsExpression()) |lhs| {
         const op_token = p.ast.tokens.advance();
         switch (p.ast.tokens.get(op_token).tag) {
             .plus_plus, .minus_minus => {
@@ -1588,6 +1588,38 @@ pub fn expression(p: *Parser) !?Ast.Node.Index {
     if (try p.bitwiseExpr(lhs_unary)) |bitwise| return bitwise;
     const lhs = try p.expectRelationalExpr(lhs_unary);
     return try p.expectShortCircuitExpr(lhs);
+}
+
+pub fn lhsExpression(p: *Parser) !?Ast.Node.Index {
+    if (p.eatToken(.ident)) |ident_token| {
+        return try p.componentOrSwizzleSpecifier(
+            try p.addNode(.{ .tag = .ident_expr, .main_token = ident_token }),
+        );
+    }
+
+    if (p.eatToken(.paren_left)) |_| {
+        const expr = try p.lhsExpression() orelse {
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected lhs expression, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+        _ = try p.expectToken(.paren_right);
+        return try p.componentOrSwizzleSpecifier(expr);
+    }
+
+    if (p.eatToken(.star)) |star_token| {
+        return try p.addNode(.{ .tag = .deref_expr, .main_token = star_token });
+    }
+
+    if (p.eatToken(.@"and")) |addr_of_token| {
+        return try p.addNode(.{ .tag = .deref_expr, .main_token = addr_of_token });
+    }
+
+    return null;
 }
 
 pub fn expectToken(p: *Parser, tag: Token.Tag) !TokenList.Index {

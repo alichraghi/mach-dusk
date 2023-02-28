@@ -182,6 +182,16 @@ pub const Node = struct {
         /// lhs is condition expression
         /// rhs is body block
         while_statement,
+        /// main_token is '++' or '--'
+        /// lhs is expression
+        increase_decrement_statement,
+        /// main_token is compound assignment operator
+        /// lhs is expression
+        /// rhs is expression
+        compound_assign_statement,
+        /// main_token is '='
+        /// lhs is expression
+        phony_assign_statement,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -493,6 +503,10 @@ test "no errors" {
         \\    let xd = 1;
         \\
         \\    while true {}
+        \\
+        \\    xd = 1;
+        \\    xd += 1;
+        \\    xd++;
         \\
         \\    loop {
         \\        continuing {

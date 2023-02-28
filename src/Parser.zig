@@ -595,7 +595,6 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
 
 /// Statement
 ///   | ForStatement                           TODO
-///   | WhileStatement                         TODO
 ///   | VariableUpdatingStatement SEMICOLON    TODO
 ///
 /// for simplicity and better error messages,
@@ -610,7 +609,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
         try p.continueStatement() orelse
         try p.constAssert() orelse
         try p.callExpr() orelse
-        try p.varStatement()) |node|
+        try p.varStatement() orelse
+        try p.varUpdateStatement()) |node|
     {
         _ = try p.expectToken(.semicolon);
         return node;
@@ -936,6 +936,76 @@ pub fn varStatement(p: *Parser) !?Ast.Node.Index {
         .lhs = const_let_type,
         .rhs = initializer,
     });
+}
+
+pub fn varUpdateStatement(p: *Parser) !?Ast.Node.Index {
+    if (p.eatToken(.underscore)) |_| {
+        const equal_token = try p.expectToken(.equal);
+        const expr = try p.expression() orelse {
+            p.addError(
+                p.ast.tokens.peek(0).loc,
+                "expected expression, found '{s}'",
+                .{p.ast.tokens.peek(0).tag.symbol()},
+                &.{},
+            );
+            return error.Parsing;
+        };
+        return try p.addNode(.{
+            .tag = .phony_assign_statement,
+            .main_token = equal_token,
+            .lhs = expr,
+        });
+    } else if (try p.expression()) |lhs| {
+        const op_token = p.ast.tokens.advance();
+        switch (p.ast.tokens.get(op_token).tag) {
+            .plus_plus, .minus_minus => {
+                return try p.addNode(.{
+                    .tag = .increase_decrement_statement,
+                    .main_token = op_token,
+                    .lhs = lhs,
+                });
+            },
+            .equal,
+            .plus_equal,
+            .minus_equal,
+            .times_equal,
+            .division_equal,
+            .modulo_equal,
+            .and_equal,
+            .or_equal,
+            .xor_equal,
+            .shift_right_equal,
+            .shift_left_equal,
+            => {
+                const expr = try p.expression() orelse {
+                    p.addError(
+                        p.ast.tokens.peek(0).loc,
+                        "expected expression, found '{s}'",
+                        .{p.ast.tokens.peek(0).tag.symbol()},
+                        &.{},
+                    );
+                    return error.Parsing;
+                };
+                return try p.addNode(.{
+                    .tag = .compound_assign_statement,
+                    .main_token = op_token,
+                    .lhs = lhs,
+                    .rhs = expr,
+                });
+            },
+            else => {
+                p.addError(
+                    p.ast.tokens.get(op_token).loc,
+                    "invalid assignment operator '{s}'",
+                    .{p.ast.tokens.get(op_token).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            },
+        }
+    }
+
+    return null;
 }
 
 // /// VariableStatement

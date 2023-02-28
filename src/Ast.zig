@@ -178,6 +178,10 @@ pub const Node = struct {
         /// lhs is a type [Optional]
         /// rhs is initializer expression
         let_decl,
+        /// main_token is 'while'
+        /// lhs is condition expression
+        /// rhs is body block
+        while_statement,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -487,6 +491,8 @@ test "no errors" {
         \\    var xd = 1;
         \\    const xd = 1;
         \\    let xd = 1;
+        \\
+        \\    while true {}
         \\
         \\    loop {
         \\        continuing {

@@ -596,7 +596,6 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
 /// Statement
 ///   | ForStatement                           TODO
 ///   | WhileStatement                         TODO
-///   | VariableStatement         SEMICOLON    TODO
 ///   | VariableUpdatingStatement SEMICOLON    TODO
 ///
 /// for simplicity and better error messages,
@@ -621,7 +620,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
         try p.continuingStatement() orelse
         try p.block() orelse
         try p.ifStatement() orelse
-        try p.switchStatement()) |node|
+        try p.switchStatement() orelse
+        try p.whileStatement()) |node|
     {
         return node;
     }
@@ -677,6 +677,26 @@ pub fn loopStatement(p: *Parser) !?Ast.Node.Index {
         .tag = .loop_statement,
         .main_token = main_token,
         .lhs = body,
+    });
+}
+
+pub fn whileStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_while) orelse return null;
+    const cond = try p.expression() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected condition expression, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+    const body = try p.expectBlock();
+    return try p.addNode(.{
+        .tag = .while_statement,
+        .main_token = main_token,
+        .lhs = cond,
+        .rhs = body,
     });
 }
 

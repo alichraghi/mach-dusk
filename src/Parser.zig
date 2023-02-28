@@ -610,7 +610,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
         try p.breakStatement() orelse
         try p.continueStatement() orelse
         try p.constAssert() orelse
-        try p.callExpr()) |node|
+        try p.callExpr() orelse
+        try p.varStatement()) |node|
     {
         _ = try p.expectToken(.semicolon);
         return node;
@@ -840,6 +841,80 @@ pub fn switchStatement(p: *Parser) !?Ast.Node.Index {
         .main_token = main_token,
         .lhs = expr,
         .rhs = try p.listToSpan(case_list),
+    });
+}
+
+pub fn varStatement(p: *Parser) !?Ast.Node.Index {
+    if (p.eatToken(.keyword_var)) |var_token| {
+        var addr_space = null_index;
+        var access_mode = null_index;
+        if (p.eatToken(.less_than)) |_| {
+            addr_space = try p.expectAddressSpace();
+            access_mode = if (p.eatToken(.comma)) |_|
+                try p.expectAccessMode()
+            else
+                null_index;
+            _ = try p.expectToken(.greater_than);
+        }
+
+        _ = try p.expectToken(.ident);
+        var var_type = null_index;
+        if (p.eatToken(.colon)) |_| {
+            var_type = try p.expectTypeSpecifier();
+        }
+
+        var initializer = null_index;
+        if (p.eatToken(.equal)) |_| {
+            initializer = try p.expression() orelse {
+                p.addError(
+                    p.ast.tokens.peek(0).loc,
+                    "expected initializer expression, found '{s}'",
+                    .{p.ast.tokens.peek(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            };
+        }
+
+        const extra = try p.addExtra(Ast.Node.VarDecl{
+            .addr_space = addr_space,
+            .access_mode = access_mode,
+            .type = var_type,
+        });
+        return try p.addNode(.{
+            .tag = .var_decl,
+            .main_token = var_token,
+            .lhs = extra,
+            .rhs = initializer,
+        });
+    }
+
+    const const_let_token = p.eatToken(.keyword_const) orelse p.eatToken(.keyword_let) orelse return null;
+    _ = try p.expectToken(.ident);
+    var const_let_type = null_index;
+    if (p.eatToken(.colon)) |_| {
+        const_let_type = try p.expectTypeSpecifier();
+    }
+
+    _ = try p.expectToken(.equal);
+    const initializer = try p.expression() orelse {
+        p.addError(
+            p.ast.tokens.peek(0).loc,
+            "expected initializer expression, found '{s}'",
+            .{p.ast.tokens.peek(0).tag.symbol()},
+            &.{},
+        );
+        return error.Parsing;
+    };
+
+    return try p.addNode(.{
+        .tag = if (p.ast.tokens.get(const_let_token).tag == .keyword_const)
+            .const_decl
+        else
+            .let_decl,
+        .main_token = const_let_token,
+        .lhs = const_let_type,
+        .rhs = initializer,
     });
 }
 

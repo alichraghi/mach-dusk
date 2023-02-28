@@ -166,6 +166,18 @@ pub const Node = struct {
         /// lhs is cases span
         /// lhs is body block
         switch_case_default,
+        /// main_token is 'var'
+        /// lhs is a GlobalVarDecl
+        /// rhs is initializer expression [Optional]
+        var_decl,
+        /// main_token is 'const'
+        /// lhs is a type [Optional]
+        /// rhs is initializer expression
+        const_decl,
+        /// main_token is 'let'
+        /// lhs is a type [Optional]
+        /// rhs is initializer expression
+        let_decl,
 
         // ********* Types *********
         /// main_token is ScalarType
@@ -307,6 +319,13 @@ pub const Node = struct {
     };
 
     pub const GlobalVarDecl = struct {
+        attrs: Index = null_index,
+        addr_space: TokenList.Index = null_index,
+        access_mode: TokenList.Index = null_index,
+        type: Index = null_index,
+    };
+
+    pub const VarDecl = struct {
         attrs: Index = null_index,
         addr_space: TokenList.Index = null_index,
         access_mode: TokenList.Index = null_index,
@@ -464,6 +483,10 @@ test "no errors" {
         \\    }
         \\
         \\    hello();
+        \\
+        \\    var xd = 1;
+        \\    const xd = 1;
+        \\    let xd = 1;
         \\
         \\    loop {
         \\        continuing {

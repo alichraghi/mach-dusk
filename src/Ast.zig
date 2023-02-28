@@ -182,6 +182,10 @@ pub const Node = struct {
         /// lhs is condition expression
         /// rhs is body block
         while_statement,
+        /// main_token is 'for'
+        /// lhs is ForHeader
+        /// rhs is body block
+        for_statement,
         /// main_token is '++' or '--'
         /// lhs is expression
         increase_decrement_statement,
@@ -372,6 +376,12 @@ pub const Node = struct {
         cond: Index,
         body: Index,
     };
+
+    pub const ForHeader = struct {
+        init: Index = null_index,
+        cond: Index = null_index,
+        update: Index = null_index,
+    };
 };
 
 pub const BuiltinValue = enum {
@@ -503,6 +513,8 @@ test "no errors" {
         \\    let xd = 1;
         \\
         \\    while true {}
+        \\
+        \\    for (xd = 0;xd < 5;xd++) {}
         \\
         \\    xd = 1;
         \\    xd += 1;

@@ -593,10 +593,6 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
     };
 }
 
-/// Statement
-///   | ForStatement                           TODO
-///   | VariableUpdatingStatement SEMICOLON    TODO
-///
 /// for simplicity and better error messages,
 /// we are putting all statements here
 pub fn statement(p: *Parser) !?Ast.Node.Index {
@@ -621,7 +617,8 @@ pub fn statement(p: *Parser) !?Ast.Node.Index {
         try p.block() orelse
         try p.ifStatement() orelse
         try p.switchStatement() orelse
-        try p.whileStatement()) |node|
+        try p.whileStatement() orelse
+        try p.forStatement()) |node|
     {
         return node;
     }
@@ -696,6 +693,41 @@ pub fn whileStatement(p: *Parser) !?Ast.Node.Index {
         .tag = .while_statement,
         .main_token = main_token,
         .lhs = cond,
+        .rhs = body,
+    });
+}
+
+pub fn forStatement(p: *Parser) !?Ast.Node.Index {
+    const main_token = p.eatToken(.keyword_for) orelse return null;
+    _ = try p.expectToken(.paren_left);
+
+    // for init
+    const init = try p.callExpr() orelse
+        try p.varStatement() orelse
+        try p.varUpdateStatement() orelse
+        null_index;
+    _ = try p.expectToken(.semicolon);
+
+    const cond = try p.expression() orelse null_index;
+    _ = try p.expectToken(.semicolon);
+
+    // for update
+    const update = try p.callExpr() orelse
+        try p.varUpdateStatement() orelse
+        null_index;
+
+    _ = try p.expectToken(.paren_right);
+    const body = try p.expectBlock();
+
+    const extra = try p.addExtra(Ast.Node.ForHeader{
+        .init = init,
+        .cond = cond,
+        .update = update,
+    });
+    return try p.addNode(.{
+        .tag = .for_statement,
+        .main_token = main_token,
+        .lhs = extra,
         .rhs = body,
     });
 }
@@ -1007,48 +1039,6 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Node.Index {
 
     return null;
 }
-
-// /// VariableStatement
-// ///   : VariableDecl                          TODO
-// ///   | VariableDecl       EQUAL Expr         TODO
-// ///   | LET   OptionalType EQUAL Expr
-// ///   | CONST OptionalType EQUAL Expr
-// pub fn varStatement(p: *Parser) !Ast.Variable {
-//     switch (p.ast.tokens.peek(0).tag) {
-//         .keyword_let, .keyword_const => {
-//             _ = p.ast.tokens.advance();
-
-//             // const opt_type_ident = try p.expectOptionalyTypedIdent();
-//             // _ = try p.expectToken(.equal);
-//             // const value = p.expression() catch |err| {
-//             //     if (err == error.Parsing) {
-//             //         p.addError(
-//             //             p.ast.tokens.peek(0).loc,
-//             //             "expected initializer expression, found '{s}'",
-//             //             .{p.ast.tokens.peek(0).tag.symbol()},
-//             //             &.{},
-//             //         );
-//             //     }
-//             //     return err;
-//             // };
-//             // _ = try p.expectToken(.semicolon);
-
-//             // const scope: Ast.Variable.Scope = switch (tag) {
-//             //     .keyword_let => .function,
-//             //     .keyword_const => .module_or_function,
-//             //     else => unreachable,
-//             // };
-
-//             // return .{
-//             //     .name = opt_type_ident.name,
-//             //     .type = opt_type_ident.type,
-//             //     .value = value,
-//             // };
-//             return error.Parsing;
-//         },
-//         else => return error.Parsing,
-//     }
-// }
 
 pub fn expectTypeSpecifier(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Node.Index {
     return try p.typeSpecifier() orelse {
@@ -1401,7 +1391,6 @@ pub fn expectMultiplicativeExpr(p: *Parser, lhs_unary: Ast.Node.Index) !Ast.Node
     }
 }
 
-/// TODO: ComponentOrSwizzleSpecifier
 pub fn expectAdditiveExpr(p: *Parser, lhs_mul: Ast.Node.Index) !Ast.Node.Index {
     var lhs = lhs_mul;
     while (true) {

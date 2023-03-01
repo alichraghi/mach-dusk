@@ -11,11 +11,7 @@ extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
 tokens: TokenList,
 
 /// parses a TranslationUnit(WGSL Program)
-pub fn parse(
-    allocator: std.mem.Allocator,
-    source: [:0]const u8,
-    error_file: ?std.fs.File,
-) !Ast {
+pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     var tokenizer = Tokenizer.init(source);
     const estimated_tokens = source.len / 8;
     var tokens = try std.ArrayList(Token).initCapacity(allocator, estimated_tokens);
@@ -29,9 +25,12 @@ pub fn parse(
         .allocator = allocator,
         .source = source,
         .ast = .{ .tokens = .{ .list = try tokens.toOwnedSlice() } },
-        .error_file = error_file orelse std.io.getStdErr(),
+        .error_list = .{ .allocator = allocator, .source = source },
     };
-    defer p.scratch.deinit(allocator);
+    defer {
+        p.scratch.deinit(allocator);
+        p.error_list.deinit();
+    }
     errdefer p.ast.deinit(allocator);
 
     const estimated_nodes = (p.ast.tokens.list.len + 2) / 2;
@@ -50,7 +49,10 @@ pub fn parse(
         try p.scratch.append(allocator, decl);
     }
 
-    if (p.failed) return error.Parsing;
+    if (p.error_list.errors.items.len > 0) {
+        try p.error_list.flush();
+        return error.Parsing;
+    }
 
     const list = p.scratch.items[scratch_top..];
     try p.ast.extra_data.appendSlice(allocator, list);
@@ -258,61 +260,61 @@ pub const Node = struct {
         /// main_token is %
         mod,
         /// lhs + rhs
-        /// main_token +
+        /// main_token is +
         add,
         /// lhs - rhs
-        /// main_token -
+        /// main_token is -
         sub,
         /// lhs << rhs
-        /// main_token <<
+        /// main_token is <<
         shift_left,
         /// lhs >> rhs
-        /// main_token >>
+        /// main_token is >>
         shift_right,
         /// lhs & rhs
-        /// main_token &
+        /// main_token is &
         binary_and,
         /// lhs | rhs
-        /// main_token |
+        /// main_token is |
         binary_or,
         /// lhs ^ rhs
-        /// main_token ^
+        /// main_token is ^
         binary_xor,
         /// lhs && rhs
-        /// main_token &&
+        /// main_token is &&
         circuit_and,
         /// lhs || rhs
-        /// main_token ||
+        /// main_token is ||
         circuit_or,
         /// !lhs
-        /// main_token !
+        /// main_token is !
         not,
         /// -lhs
-        /// main_token -
+        /// main_token is -
         negate,
         /// *lhs
-        /// main_token *
+        /// main_token is *
         deref,
         /// &lhs
-        /// main_token &
+        /// main_token is &
         addr_of,
         /// lhs == rhs
-        /// main_token ==
+        /// main_token is ==
         equal,
         /// lhs != rhs
-        /// main_token !=
+        /// main_token is !=
         not_equal,
         /// lhs < rhs
-        /// main_token <
+        /// main_token is <
         less,
         /// lhs <= rhs
-        /// main_token <=
+        /// main_token is <=
         less_equal,
         /// lhs > rhs
-        /// main_token >
+        /// main_token is >
         greater,
         /// lhs >= rhs
-        /// main_token >=
+        /// main_token is >=
         greater_equal,
         /// vec2<f32>(2)
         /// main_token is an identifier or
@@ -468,7 +470,7 @@ test Parser {
 
 test "empty" {
     const source = "";
-    var ast = try parse(std.testing.allocator, source, null);
+    var ast = try parse(std.testing.allocator, source);
     defer ast.deinit(std.testing.allocator);
 }
 
@@ -549,59 +551,16 @@ test "no errors" {
         \\    }
         \\}
     ** 1;
-    var ast = try parse(std.heap.c_allocator, source, null);
+    var ast = try parse(std.heap.c_allocator, source);
     defer ast.deinit(std.heap.c_allocator);
 }
-
-// test "no errors" {
-//     const t = std.time.microTimestamp() * std.time.ns_per_us;
-//     const source =
-//         \\;
-//         \\@interpolate(flat) var expr = vec3<f32>(1, 5);
-//         \\var<storage> expr = bitcast<f32>(5);
-//         \\var expr;
-//         \\var expr = bool();
-//         \\var expr = ~(-(!false));
-//         \\var expr = expr;
-//         \\var expr = expr(expr);
-//         \\const hello = 1;
-//         \\override hello;
-//         \\type the_type = ptr<workgroup, f32, read>;
-//         \\type the_type = array<f32, expr>;
-//         \\type the_type = vec3<f32>;
-//         \\type the_type = mat2x3<f32>;
-//         \\type the_type = atomic<u32>;
-//         \\type the_type = sampler;
-//         \\struct S {
-//         \\  s: u32,
-//         \\}
-//         \\const_assert 2 > 1;
-//         \\fn foo(f: u32) -> u32 {}
-//         \\fn foo(f: u32) -> u32 {
-//         \\    loop {
-//         \\        continuing {
-//         \\            continue;
-//         \\            break;
-//         \\            break if true;
-//         \\        }
-//         \\        return bar;
-//         \\        return;
-//         \\        const_assert 2 > 1;
-//         \\    }
-//         \\}
-//     ** 1;
-
-//     var ast = try parse(std.testing.allocator, source, null);
-//     defer ast.deinit(std.testing.allocator);
-//     std.debug.print("\n{s}\n", .{std.fmt.fmtDurationSigned(std.time.microTimestamp() * std.time.ns_per_us - t)});
-// }
 
 test "variable & expressions" {
     const source =
         \\var expr = 1 + 5 + 2 * 3 > 6 >> 7;
     ;
 
-    var ast = try parse(std.testing.allocator, source, null);
+    var ast = try parse(std.testing.allocator, source);
     defer ast.deinit(std.testing.allocator);
 
     const root = ast.nodes.get(0);
@@ -638,53 +597,3 @@ test "variable & expressions" {
     const @"7" = ast.nodes.get(@"6 >> 7".rhs);
     try expect(@"7".tag == .number_literal);
 }
-
-// test "type alias" {
-//     const source =
-//         \\type my_type = vec3<f32>;
-//     ;
-
-//     var ast = try parse(std.testing.allocator, source, null);
-//     defer ast.deinit(std.testing.allocator);
-
-//     const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
-//     const vec3_elements_type = ast.getType(vec3.vector.element);
-
-//     try expect(vec3.vector.prefix == .vec3);
-//     try expect(vec3_elements_type.scalar == .f32);
-// }
-
-// test "struct" {
-//     const source =
-//         \\struct S { s: u32 }
-//     ;
-
-//     var ast = try parse(std.testing.allocator, source, null);
-//     defer ast.deinit(std.testing.allocator);
-
-//     const strct = ast.getGlobal(0).@"struct";
-//     const strct_member_s = strct.members[0];
-//     const strct_member_s_type = ast.getType(strct_member_s.type).scalar;
-
-//     try expect(strct.members.len == 1);
-//     try expectEqualStrings("S", strct.name);
-//     try expectEqualStrings("s", strct_member_s.name);
-//     try expect(strct_member_s_type == .u32);
-// }
-
-// test "research" {
-//     if (true) return error.SkipZigTest;
-
-//     const source =
-//         \\type my_type = array<f32, sampler()>;
-//     ;
-
-//     var ast = try parse(std.testing.allocator, source, null);
-//     defer ast.deinit(std.testing.allocator);
-
-//     const vec3 = ast.getType(ast.getGlobal(0).type_alias.type);
-//     const vec3_elements_type = ast.getType(vec3.vector.element);
-
-//     try expect(vec3.vector.prefix == .vec3);
-//     try expect(vec3_elements_type.scalar == .f32);
-// }

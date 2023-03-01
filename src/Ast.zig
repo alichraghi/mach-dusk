@@ -3,12 +3,14 @@ const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const TokenList = @import("TokenList.zig");
 const Parser = @import("Parser.zig");
+const Resolver = @import("Resolver.zig");
 
 const Ast = @This();
 
 nodes: std.MultiArrayList(Node) = .{},
 extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
 tokens: TokenList,
+source: [:0]const u8,
 
 /// parses a TranslationUnit(WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
@@ -23,8 +25,10 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
 
     var p = Parser{
         .allocator = allocator,
-        .source = source,
-        .ast = .{ .tokens = .{ .list = try tokens.toOwnedSlice() } },
+        .ast = .{
+            .tokens = .{ .list = try tokens.toOwnedSlice() },
+            .source = source,
+        },
         .error_list = .{ .allocator = allocator, .source = source },
     };
     defer {
@@ -37,7 +41,7 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     try p.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
 
     const root = p.addNode(.{
-        .tag = .translation_unit,
+        .tag = .span,
         .main_token = undefined,
     }) catch unreachable;
 
@@ -58,6 +62,9 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     try p.ast.extra_data.appendSlice(allocator, list);
     p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
     p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
+
+    // resolve
+    try Resolver.resolve(allocator, p.ast);
 
     return p.ast;
 }
@@ -80,9 +87,6 @@ pub const Node = struct {
     pub const Tag = enum {
         /// a helper node pointing at extra_data[lhs..rhs]
         span,
-
-        /// root node pointing at extra_data[lhs..rhs]
-        translation_unit,
 
         // ********* Global declarations *********
         /// main_token is 'var'

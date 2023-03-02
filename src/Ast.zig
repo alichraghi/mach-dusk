@@ -142,56 +142,56 @@ pub const Node = struct {
         /// TOK : k_return
         /// LHS : Expr?
         /// RHS : --
-        return_statement,
+        @"return",
 
         /// TOK : k_discard
         /// LHS : --
         /// RHS : --
-        discard_statement,
+        discard,
 
         /// TOK : k_loop
         /// LHS : block
         /// RHS : --
-        loop_statement,
+        loop,
 
         /// TOK : k_continuing
         /// LHS : block
         /// RHS : --
-        continuing_statement,
+        continuing,
 
         /// TOK : k_break
         /// LHS : Expr
         /// RHS : --
-        break_if_statement,
+        break_if,
 
         /// TOK : k_break
         /// LHS : --
         /// RHS : --
-        break_statement,
+        @"break",
 
         /// TOK : k_continue
         /// LHS : --
         /// RHS : --
-        continue_statement,
+        @"continue",
 
         /// TOK : k_if
         /// LHS : Expr
         /// RHS : blcok
-        if_statement,
+        @"if",
         /// RHS is else body
         /// TOK : k_if
-        /// LHS : if_statement
+        /// LHS : if
         /// RHS : blcok
-        if_else_statement,
+        if_else,
         /// TOK : k_if
-        /// LHS : if_statement
-        /// RHS : if_statement, if_else_statement, if_else_if_statement
-        if_else_if_statement,
+        /// LHS : if
+        /// RHS : if, if_else, if_else_if
+        if_else_if,
 
         /// TOK : k_switch
         /// LHS : Expr
         /// RHS : span(switch_case, switch_default, switch_case_default)
-        switch_statement,
+        @"switch",
         /// TOK : k_case
         /// LHS : span(Expr)
         /// RHS : block
@@ -224,16 +224,16 @@ pub const Node = struct {
         /// TOK : k_while
         /// LHS : Expr
         /// RHS : block
-        while_statement,
+        @"while",
 
         /// TOK : k_for
         /// LHS : ForHeader
         /// RHS : block
-        for_statement,
+        @"for",
 
         /// TOK : plus_plus, minus_minus
         /// LHS : Expr
-        increase_decrement_statement,
+        increase_decrement,
 
         /// TOK : plus_equal,        minus_equal,
         ///       times_equal,       division_equal,
@@ -242,12 +242,12 @@ pub const Node = struct {
         ///       shift_right_equal, shift_left_equal
         /// LHS : Expr
         /// RHS : Expr
-        compound_assign_statement,
+        compound_assign,
 
         /// TOK : equal
         /// LHS : Expr
         /// RHS : --
-        phony_assign_statement,
+        phony_assign,
 
         // ####### Type #######
 
@@ -319,115 +319,116 @@ pub const Node = struct {
         attr_interpolate,
 
         // ####### Expr #######
+        // see both Parser.zig and https://gpuweb.github.io/gpuweb/wgsl/#expression-grammar
 
         /// TOK : *
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         mul,
 
         /// TOK : /
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         div,
 
         /// TOK : %
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         mod,
 
         /// TOK : +
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         add,
 
         /// TOK : -
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         sub,
 
         /// TOK : <<
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         shift_left,
 
         /// TOK : >>
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         shift_right,
 
         /// TOK : &
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         binary_and,
 
         /// TOK : |
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         binary_or,
 
         /// TOK : ^
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         binary_xor,
 
         /// TOK : &&
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         circuit_and,
 
         /// TOK : ||
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         circuit_or,
 
         /// TOK : !
-        /// LHS : --
+        /// LHS : Expr
         /// RHS : --
         not,
 
         /// TOK : -
-        /// LHS : --
+        /// LHS : Expr
         /// RHS : --
         negate,
 
         /// TOK : *
-        /// LHS : --
+        /// LHS : Expr
         /// RHS : --
         deref,
 
         /// TOK : &
-        /// LHS : --
+        /// LHS : Expr
         /// RHS : --
         addr_of,
 
         /// TOK : ==
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         equal,
 
         /// TOK : !=
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         not_equal,
 
         /// TOK : <
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         less,
 
         /// TOK : <=
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         less_equal,
 
         /// TOK : >
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         greater,
 
         /// TOK : >=
-        /// LHS : --
-        /// RHS : --
+        /// LHS : Expr
+        /// RHS : Expr
         greater_equal,
 
         /// for identifier, array without element type specified,
@@ -437,25 +438,17 @@ pub const Node = struct {
         /// TOK : ident, k_array, 'scalar keywords', 'vector keywords', 'matrix keywords'
         /// LHS : (scalar_type, vector_type, matrix_type, array_type)?
         /// RHS : arguments (Expr span)
-        call_expr,
+        call,
 
         /// TOK : k_bitcast
         /// LHS : Type
         /// RHS : Expr
-        bitcast_expr,
+        bitcast,
 
         /// TOK : ident
         /// LHS : --
         /// RHS : --
         ident_expr,
-
-        /// TOK : '*'
-        /// LHS :  Expr
-        deref_expr,
-
-        /// TOK : '&'
-        /// LHS :  Expr
-        addr_of_expr,
 
         /// LHS is prefix expression
         /// TOK : ident

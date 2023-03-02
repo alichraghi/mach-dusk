@@ -573,7 +573,7 @@ pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index {
 
 pub fn breakStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_break) orelse return null;
-    return try p.addNode(.{ .tag = .break_statement, .main_token = main_token });
+    return try p.addNode(.{ .tag = .@"break", .main_token = main_token });
 }
 
 pub fn breakIfStatement(p: *Parser) !?Ast.Index {
@@ -592,7 +592,7 @@ pub fn breakIfStatement(p: *Parser) !?Ast.Index {
             return error.Parsing;
         };
         return try p.addNode(.{
-            .tag = .break_if_statement,
+            .tag = .break_if,
             .main_token = main_token,
             .lhs = cond,
         });
@@ -602,14 +602,14 @@ pub fn breakIfStatement(p: *Parser) !?Ast.Index {
 
 pub fn continueStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_continue) orelse return null;
-    return try p.addNode(.{ .tag = .continue_statement, .main_token = main_token });
+    return try p.addNode(.{ .tag = .@"continue", .main_token = main_token });
 }
 
 pub fn continuingStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_continuing) orelse return null;
     const body = try p.expectBlock();
     return try p.addNode(.{
-        .tag = .continuing_statement,
+        .tag = .continuing,
         .main_token = main_token,
         .lhs = body,
     });
@@ -617,7 +617,7 @@ pub fn continuingStatement(p: *Parser) !?Ast.Index {
 
 pub fn discardStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_discard) orelse return null;
-    return try p.addNode(.{ .tag = .discard_statement, .main_token = main_token });
+    return try p.addNode(.{ .tag = .discard, .main_token = main_token });
 }
 
 pub fn forStatement(p: *Parser) !?Ast.Index {
@@ -648,7 +648,7 @@ pub fn forStatement(p: *Parser) !?Ast.Index {
         .update = update,
     });
     return try p.addNode(.{
-        .tag = .for_statement,
+        .tag = .@"for",
         .main_token = main_token,
         .lhs = extra,
         .rhs = body,
@@ -686,7 +686,7 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
         if (p.peekToken(0).tag == .k_if) {
             const else_if = try p.ifStatement() orelse unreachable;
             return try p.addNode(.{
-                .tag = .if_else_if_statement,
+                .tag = .if_else_if,
                 .main_token = main_token,
                 .lhs = extra,
                 .rhs = else_if,
@@ -704,7 +704,7 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
         };
 
         return try p.addNode(.{
-            .tag = .if_else_statement,
+            .tag = .if_else,
             .main_token = main_token,
             .lhs = extra,
             .rhs = else_body,
@@ -712,7 +712,7 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
     }
 
     return try p.addNode(.{
-        .tag = .if_statement,
+        .tag = .@"if",
         .main_token = main_token,
         .lhs = cond,
         .rhs = body,
@@ -723,7 +723,7 @@ pub fn loopStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_loop) orelse return null;
     const body = try p.expectBlock();
     return try p.addNode(.{
-        .tag = .loop_statement,
+        .tag = .loop,
         .main_token = main_token,
         .lhs = body,
     });
@@ -733,7 +733,7 @@ pub fn returnStatement(p: *Parser) !?Ast.Index {
     const main_token = p.eatToken(.k_return) orelse return null;
     const expr = try p.expression() orelse Ast.null_index;
     return try p.addNode(.{
-        .tag = .return_statement,
+        .tag = .@"return",
         .main_token = main_token,
         .lhs = expr,
     });
@@ -798,7 +798,7 @@ pub fn switchStatement(p: *Parser) !?Ast.Index {
 
     const case_list = p.scratch.items[scratch_top..];
     return try p.addNode(.{
-        .tag = .switch_statement,
+        .tag = .@"switch",
         .main_token = main_token,
         .lhs = expr,
         .rhs = try p.listToSpan(case_list),
@@ -893,7 +893,7 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
             return error.Parsing;
         };
         return try p.addNode(.{
-            .tag = .phony_assign_statement,
+            .tag = .phony_assign,
             .main_token = equal_token,
             .lhs = expr,
         });
@@ -902,7 +902,7 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
         switch (p.ast.getToken(op_token).tag) {
             .plus_plus, .minus_minus => {
                 return try p.addNode(.{
-                    .tag = .increase_decrement_statement,
+                    .tag = .increase_decrement,
                     .main_token = op_token,
                     .lhs = lhs,
                 });
@@ -929,7 +929,7 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
                     return error.Parsing;
                 };
                 return try p.addNode(.{
-                    .tag = .compound_assign_statement,
+                    .tag = .compound_assign,
                     .main_token = op_token,
                     .lhs = lhs,
                     .rhs = expr,
@@ -963,7 +963,7 @@ pub fn whileStatement(p: *Parser) !?Ast.Index {
     };
     const body = try p.expectBlock();
     return try p.addNode(.{
-        .tag = .while_statement,
+        .tag = .@"while",
         .main_token = main_token,
         .lhs = cond,
         .rhs = body,
@@ -1193,7 +1193,7 @@ pub fn callExpr(p: *Parser) !?Ast.Index {
 
     const rhs = try p.expectArgumentListExpr();
     return try p.addNode(.{
-        .tag = .call_expr,
+        .tag = .call,
         .main_token = main_token,
         .lhs = lhs,
         .rhs = rhs,
@@ -1246,11 +1246,35 @@ pub fn lhsExpression(p: *Parser) !?Ast.Index {
     }
 
     if (p.eatToken(.star)) |star_token| {
-        return try p.addNode(.{ .tag = .deref_expr, .main_token = star_token });
+        return try p.addNode(.{
+            .tag = .deref,
+            .main_token = star_token,
+            .lhs = try p.lhsExpression() orelse {
+                try p.error_list.add(
+                    p.peekToken(0).loc,
+                    "expected lhs expression, found '{s}'",
+                    .{p.peekToken(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            },
+        });
     }
 
     if (p.eatToken(.@"and")) |addr_of_token| {
-        return try p.addNode(.{ .tag = .deref_expr, .main_token = addr_of_token });
+        return try p.addNode(.{
+            .tag = .addr_of,
+            .main_token = addr_of_token,
+            .lhs = try p.lhsExpression() orelse {
+                try p.error_list.add(
+                    p.peekToken(0).loc,
+                    "expected lhs expression, found '{s}'",
+                    .{p.peekToken(0).tag.symbol()},
+                    &.{},
+                );
+                return error.Parsing;
+            },
+        });
     }
 
     return null;
@@ -1280,7 +1304,7 @@ pub fn primaryExpr(p: *Parser) !?Ast.Index {
             _ = try p.expectToken(.greater_than);
             const expr = try p.expectParenExpr();
             return try p.addNode(.{
-                .tag = .bitcast_expr,
+                .tag = .bitcast,
                 .main_token = main_token,
                 .lhs = dest_type,
                 .rhs = expr,

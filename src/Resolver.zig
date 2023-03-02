@@ -55,7 +55,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i:
         const member = self.ast.nodes.get(member_i);
         const member_type = self.ast.nodes.get(member.rhs);
         const member_token = self.ast.tokens.get(member_type.main_token);
-        const member_name = member_token.loc.asStr(self.ast.source);
+        const member_name = member_token.loc.slice(self.ast.source);
         switch (member_type.tag) {
             .scalar_type,
             .vector_type,
@@ -96,7 +96,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i:
 pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Node.Index, name: []const u8) ?Ast.Node.Index {
     for (scope_items) |node| {
         const node_token = self.declNameToken(node) orelse continue;
-        if (std.mem.eql(u8, name, node_token.loc.asStr(self.ast.source))) {
+        if (std.mem.eql(u8, name, node_token.loc.slice(self.ast.source))) {
             return node;
         }
     }
@@ -105,11 +105,11 @@ pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Node.Index, name: 
 
 pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Node.Index, decl_node_i: Ast.Node.Index) !void {
     const decl_token = self.declNameToken(decl_node_i).?;
-    const decl_name = decl_token.loc.asStr(self.ast.source);
+    const decl_name = decl_token.loc.slice(self.ast.source);
     for (scope_items) |redecl_node_i| {
         assert(decl_node_i != redecl_node_i);
         const redecl_token = self.declNameToken(redecl_node_i).?;
-        const redecl_name = redecl_token.loc.asStr(self.ast.source);
+        const redecl_name = redecl_token.loc.slice(self.ast.source);
         if (std.mem.eql(u8, decl_name, redecl_name)) {
             try self.error_list.add(
                 redecl_token.loc,

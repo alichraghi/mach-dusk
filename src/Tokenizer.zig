@@ -30,7 +30,7 @@ const State = enum {
 };
 
 pub fn dump(self: *Tokenizer, token: Token) void {
-    std.debug.print("\x1b[0;33m{s} \x1b[0;90m\"{s}\"\x1b[0m\n", .{ @tagName(token.tag), token.loc.asStr(self.source) });
+    std.debug.print("\x1b[0;33m{s} \x1b[0;90m\"{s}\"\x1b[0m\n", .{ @tagName(token.tag), token.loc.slice(self.source) });
 }
 
 pub fn init(source: [:0]const u8) Tokenizer {

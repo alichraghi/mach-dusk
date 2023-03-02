@@ -139,12 +139,12 @@ pub fn attributeList(p: *Parser) !?Ast.Node.Index {
 pub fn attribute(p: *Parser) !?Ast.Node.Index {
     const attr_token = p.eatToken(.attr) orelse return null;
     const ident_tok = try p.expectToken(.ident);
-    const str = p.ast.tokens.get(ident_tok).loc.asStr(p.ast.source);
+    const str = p.ast.tokens.get(ident_tok).loc.slice(p.ast.source);
     const tag = std.meta.stringToEnum(Ast.Attribute, str) orelse {
         try p.error_list.add(
             p.ast.tokens.get(ident_tok).loc,
             "unknown attribute '{s}'",
-            .{p.ast.tokens.get(ident_tok).loc.asStr(p.ast.source)},
+            .{p.ast.tokens.get(ident_tok).loc.slice(p.ast.source)},
             comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.Attribute)})},
         );
         return error.Parsing;
@@ -240,14 +240,14 @@ pub fn attribute(p: *Parser) !?Ast.Node.Index {
 pub fn expectBuiltinValue(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
-        const str = p.ast.tokens.get(token).loc.asStr(p.ast.source);
+        const str = p.ast.tokens.get(token).loc.slice(p.ast.source);
         if (std.meta.stringToEnum(Ast.BuiltinValue, str)) |_| return token;
     }
 
     try p.error_list.add(
         p.ast.tokens.get(token).loc,
         "unknown builtin value name '{s}'",
-        .{p.ast.tokens.get(token).loc.asStr(p.ast.source)},
+        .{p.ast.tokens.get(token).loc.slice(p.ast.source)},
         comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.BuiltinValue)})},
     );
     return error.Parsing;
@@ -256,14 +256,14 @@ pub fn expectBuiltinValue(p: *Parser) !TokenList.Index {
 pub fn expectInterpolationType(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
-        const str = p.ast.tokens.get(token).loc.asStr(p.ast.source);
+        const str = p.ast.tokens.get(token).loc.slice(p.ast.source);
         if (std.meta.stringToEnum(Ast.InterpolationType, str)) |_| return token;
     }
 
     try p.error_list.add(
         p.ast.tokens.get(token).loc,
         "unknown interpolation type name '{s}'",
-        .{p.ast.tokens.get(token).loc.asStr(p.ast.source)},
+        .{p.ast.tokens.get(token).loc.slice(p.ast.source)},
         comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationType)})},
     );
     return error.Parsing;
@@ -272,14 +272,14 @@ pub fn expectInterpolationType(p: *Parser) !TokenList.Index {
 pub fn expectInterpolationSample(p: *Parser) !Ast.Node.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
-        const str = p.ast.tokens.get(token).loc.asStr(p.ast.source);
+        const str = p.ast.tokens.get(token).loc.slice(p.ast.source);
         if (std.meta.stringToEnum(Ast.InterpolationSample, str)) |_| return token;
     }
 
     try p.error_list.add(
         p.ast.tokens.get(token).loc,
         "unknown interpolation sample name '{s}'",
-        .{p.ast.tokens.get(token).loc.asStr(p.ast.source)},
+        .{p.ast.tokens.get(token).loc.slice(p.ast.source)},
         comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationSample)})},
     );
     return error.Parsing;
@@ -1181,14 +1181,14 @@ pub fn isMatrixPrefix(p: *Parser) bool {
 pub fn expectAddressSpace(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
-        const str = p.ast.tokens.get(token).loc.asStr(p.ast.source);
+        const str = p.ast.tokens.get(token).loc.slice(p.ast.source);
         if (std.meta.stringToEnum(Ast.AddressSpace, str)) |_| return token;
     }
 
     try p.error_list.add(
         p.ast.tokens.get(token).loc,
         "unknown address space '{s}'",
-        .{p.ast.tokens.get(token).loc.asStr(p.ast.source)},
+        .{p.ast.tokens.get(token).loc.slice(p.ast.source)},
         comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AddressSpace)})},
     );
     return error.Parsing;
@@ -1197,14 +1197,14 @@ pub fn expectAddressSpace(p: *Parser) !TokenList.Index {
 pub fn expectAccessMode(p: *Parser) !TokenList.Index {
     const token = p.ast.tokens.advance();
     if (p.ast.tokens.get(token).tag == .ident) {
-        const str = p.ast.tokens.get(token).loc.asStr(p.ast.source);
+        const str = p.ast.tokens.get(token).loc.slice(p.ast.source);
         if (std.meta.stringToEnum(Ast.AccessMode, str)) |_| return token;
     }
 
     try p.error_list.add(
         p.ast.tokens.get(token).loc,
         "unknown access mode '{s}'",
-        .{p.ast.tokens.get(token).loc.asStr(p.ast.source)},
+        .{p.ast.tokens.get(token).loc.slice(p.ast.source)},
         comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AccessMode)})},
     );
     return error.Parsing;

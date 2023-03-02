@@ -15,7 +15,7 @@ pub const Loc = struct {
     };
 
     pub fn slice(self: Loc, source: []const u8) []const u8 {
-        return source[self.loc.start..self.loc.end];
+        return source[self.start..self.end];
     }
 
     pub fn extraInfo(self: Loc, source: []const u8) Extra {

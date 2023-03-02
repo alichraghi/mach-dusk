@@ -36,7 +36,7 @@ pub fn resolve(allocator: std.mem.Allocator, ast: Ast) !void {
     }
 }
 
-pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i: Ast.Node.Index) !void {
+pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
     const node = self.ast.nodes.get(node_i);
 
     switch (node.tag) {
@@ -46,7 +46,7 @@ pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i:
     }
 }
 
-pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i: Ast.Node.Index) !void {
+pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
     const node = self.ast.nodes.get(node_i);
 
     const member_list = self.spanToList(node.lhs);
@@ -54,7 +54,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i:
         try self.checkRedeclaration(member_list[i + 1 ..], member_i);
         const member = self.ast.nodes.get(member_i);
         const member_type = self.ast.nodes.get(member.rhs);
-        const member_token = self.ast.tokens.get(member_type.main_token);
+        const member_token = self.ast.getToken(member_type.main_token);
         const member_name = member_token.loc.slice(self.ast.source);
         switch (member_type.tag) {
             .scalar_type,
@@ -93,7 +93,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Node.Index, node_i:
     }
 }
 
-pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Node.Index, name: []const u8) ?Ast.Node.Index {
+pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Index, name: []const u8) ?Ast.Index {
     for (scope_items) |node| {
         const node_token = self.declNameToken(node) orelse continue;
         if (std.mem.eql(u8, name, node_token.loc.slice(self.ast.source))) {
@@ -103,7 +103,7 @@ pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Node.Index, name: 
     return null;
 }
 
-pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Node.Index, decl_node_i: Ast.Node.Index) !void {
+pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_node_i: Ast.Index) !void {
     const decl_token = self.declNameToken(decl_node_i).?;
     const decl_name = decl_token.loc.slice(self.ast.source);
     for (scope_items) |redecl_node_i| {
@@ -123,33 +123,33 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Node.Index, 
     }
 }
 
-pub fn declNameToken(self: *Resolver, node_i: Ast.Node.Index) ?Token {
+pub fn declNameToken(self: *Resolver, node_i: Ast.Index) ?Token {
     const node = self.ast.nodes.get(node_i);
     return switch (node.tag) {
-        .global_variable => self.ast.tokens.get(self.extraData(node.lhs, Ast.Node.GlobalVarDecl).name),
+        .global_variable => self.ast.getToken(self.extraData(node.lhs, Ast.Node.GlobalVarDecl).name),
         .struct_decl,
         .fn_decl,
         .global_constant,
         .global_override,
         .type_alias,
-        => self.ast.tokens.get(node.main_token + 1),
-        .struct_member => self.ast.tokens.get(node.main_token),
+        => self.ast.getToken(node.main_token + 1),
+        .struct_member => self.ast.getToken(node.main_token),
         else => null,
     };
 }
 
-pub fn spanToList(self: *Resolver, span: Ast.Node.Index) []const Ast.Node.Index {
+pub fn spanToList(self: *Resolver, span: Ast.Index) []const Ast.Index {
     const node = self.ast.nodes.get(span);
     assert(node.tag == .span);
-    return self.ast.extra_data.items[node.lhs..node.rhs];
+    return self.ast.extra.items[node.lhs..node.rhs];
 }
 
-pub fn extraData(self: *Resolver, index: Ast.Node.Index, comptime T: type) T {
+pub fn extraData(self: *Resolver, index: Ast.Index, comptime T: type) T {
     const fields = std.meta.fields(T);
     var result: T = undefined;
     inline for (fields, 0..) |field, i| {
-        comptime assert(field.type == Ast.Node.Index);
-        @field(result, field.name) = self.ast.extra_data.items[index + i];
+        comptime assert(field.type == Ast.Index);
+        @field(result, field.name) = self.ast.extra.items[index + i];
     }
     return result;
 }

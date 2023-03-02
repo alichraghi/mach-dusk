@@ -8,7 +8,7 @@ const max_file_size = 1024 * 1024;
 test "empty" {
     const source = "";
     var ast = try Ast.parse(std.testing.allocator, source);
-    defer ast.deinit(std.testing.allocator);
+    defer ast.deinit();
 }
 
 test "boids" {
@@ -22,7 +22,7 @@ test "boids" {
     );
     defer std.testing.allocator.free(source);
     var ast = try Ast.parse(std.testing.allocator, source);
-    defer ast.deinit(std.testing.allocator);
+    defer ast.deinit();
 }
 
 test "gkurve" {
@@ -37,23 +37,23 @@ test "gkurve" {
     );
     defer std.testing.allocator.free(source);
     var ast = try Ast.parse(std.testing.allocator, source);
-    defer ast.deinit(std.testing.allocator);
+    defer ast.deinit();
 }
 
 test "variable & expressions" {
     const source = "var expr = 1 + 5 + 2 * 3 > 6 >> 7;";
 
     var ast = try Ast.parse(std.testing.allocator, source);
-    defer ast.deinit(std.testing.allocator);
+    defer ast.deinit();
 
     const root = ast.nodes.get(0);
     try expect(root.lhs + 1 == root.rhs);
 
-    const @"var expr = 1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(ast.extra_data.items[root.lhs]);
-    const expr = ast.tokens.get(ast.extra_data.items[@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".lhs + 1]);
+    const @"var expr = 1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(ast.extra.items[root.lhs]);
+    const expr = ast.getToken(ast.extra.items[@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".lhs + 1]);
     try expect(std.mem.eql(u8, "expr", expr.loc.slice(source)));
     try expect(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".tag == .global_variable);
-    try expect(ast.tokens.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .keyword_var);
+    try expect(ast.getToken(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .keyword_var);
 
     const @"1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".rhs);
     try expect(@"1 + 5 + 2 * 3 > 6 >> 7".tag == .greater);

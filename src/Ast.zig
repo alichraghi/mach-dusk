@@ -1,43 +1,46 @@
 const std = @import("std");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
-const TokenList = @import("TokenList.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
 
 const Ast = @This();
+pub const Index = u32;
 
-nodes: std.MultiArrayList(Node) = .{},
-extra_data: std.ArrayListUnmanaged(Node.Index) = .{},
-tokens: TokenList,
+allocator: std.mem.Allocator,
 source: [:0]const u8,
+tokens: std.ArrayListUnmanaged(Token) = .{},
+nodes: std.MultiArrayList(Node) = .{},
+extra: std.ArrayListUnmanaged(Index) = .{},
+
+pub fn getToken(self: Ast, i: Index) Token {
+    return self.tokens.items[std.math.min(i, self.tokens.items.len)];
+}
 
 /// parses a TranslationUnit(WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
+    var p = Parser{
+        .allocator = allocator,
+        .ast = .{ .allocator = allocator, .source = source },
+        .error_list = .{ .allocator = allocator, .source = source },
+    };
+
     var tokenizer = Tokenizer.init(source);
     const estimated_tokens = source.len / 8;
-    var tokens = try std.ArrayList(Token).initCapacity(allocator, estimated_tokens);
+    try p.ast.tokens.ensureTotalCapacity(allocator, estimated_tokens);
     while (true) {
         const t = tokenizer.next();
-        try tokens.append(t);
+        try p.ast.tokens.append(allocator, t);
         if (t.tag == .eof) break;
     }
 
-    var p = Parser{
-        .allocator = allocator,
-        .ast = .{
-            .tokens = .{ .list = try tokens.toOwnedSlice() },
-            .source = source,
-        },
-        .error_list = .{ .allocator = allocator, .source = source },
-    };
     defer {
         p.scratch.deinit(allocator);
         p.error_list.deinit();
     }
-    errdefer p.ast.deinit(allocator);
+    errdefer p.ast.deinit();
 
-    const estimated_nodes = (p.ast.tokens.list.len + 2) / 2;
+    const estimated_nodes = (p.ast.tokens.items.len + 2) / 2;
     try p.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
 
     const root = p.addNode(.{
@@ -48,7 +51,7 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
-    while (p.ast.tokens.peek(0).tag != .eof) {
+    while (p.peekToken(0).tag != .eof) {
         const decl = try p.expectGlobalDeclRecoverable() orelse continue;
         try p.scratch.append(allocator, decl);
     }
@@ -59,9 +62,9 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     }
 
     const list = p.scratch.items[scratch_top..];
-    try p.ast.extra_data.appendSlice(allocator, list);
-    p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len - list.len);
-    p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Node.Index, p.ast.extra_data.items.len);
+    try p.ast.extra.appendSlice(allocator, list);
+    p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len - list.len);
+    p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len);
 
     // resolve
     try Resolver.resolve(allocator, p.ast);
@@ -69,23 +72,21 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     return p.ast;
 }
 
-pub fn deinit(self: *Ast, allocator: std.mem.Allocator) void {
-    self.nodes.deinit(allocator);
-    self.extra_data.deinit(allocator);
-    allocator.free(self.tokens.list);
+pub fn deinit(self: *Ast) void {
+    self.nodes.deinit(self.allocator);
+    self.extra.deinit(self.allocator);
+    self.tokens.deinit(self.allocator);
 }
 
-pub const null_index: Node.Index = 0;
+pub const null_index: Index = 0;
 pub const Node = struct {
     tag: Tag,
-    main_token: TokenList.Index,
+    main_token: Index,
     lhs: Index = null_index,
     rhs: Index = null_index,
 
-    pub const Index = u32;
-
     pub const Tag = enum {
-        /// a helper node pointing at extra_data[lhs..rhs]
+        /// a helper node pointing at extra[lhs..rhs]
         span,
 
         // ********* Global declarations *********
@@ -361,16 +362,16 @@ pub const Node = struct {
 
     pub const GlobalVarDecl = struct {
         attrs: Index = null_index,
-        name: TokenList.Index,
-        addr_space: TokenList.Index = null_index,
-        access_mode: TokenList.Index = null_index,
+        name: Index, // Token
+        addr_space: Index = null_index, // Token
+        access_mode: Index = null_index, // Token
         type: Index = null_index,
     };
 
     pub const VarDecl = struct {
-        name: TokenList.Index,
-        addr_space: TokenList.Index = null_index,
-        access_mode: TokenList.Index = null_index,
+        name: Index, // Token
+        addr_space: Index = null_index, // Token
+        access_mode: Index = null_index, // Token
         type: Index = null_index,
     };
 
@@ -380,8 +381,8 @@ pub const Node = struct {
     };
 
     pub const PtrType = struct {
-        addr_space: TokenList.Index,
-        access_mode: TokenList.Index = null_index,
+        addr_space: Index, // Token
+        access_mode: Index = null_index, // Token
     };
 
     pub const WorkgroupSize = struct {

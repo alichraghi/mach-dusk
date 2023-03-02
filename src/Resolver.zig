@@ -130,7 +130,7 @@ pub fn declNameToken(self: *Resolver, node_i: Ast.Index) ?Token {
         .struct_decl,
         .fn_decl,
         .global_constant,
-        .global_override,
+        .override,
         .type_alias,
         => self.ast.getToken(node.main_token + 1),
         .struct_member => self.ast.getToken(node.main_token),

@@ -17,7 +17,7 @@ pub fn getToken(self: Ast, i: Index) Token {
     return self.tokens.items[std.math.min(i, self.tokens.items.len)];
 }
 
-/// parses a TranslationUnit(WGSL Program)
+/// parses TranslationUnit(WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     var p = Parser{
         .allocator = allocator,
@@ -86,277 +86,397 @@ pub const Node = struct {
     rhs: Index = null_index,
 
     pub const Tag = enum {
-        /// a helper node pointing at extra[lhs..rhs]
+        /// an slice to extra field [LHS..RHS]
+        /// TOK : undefined
+        /// LHS : Index
+        /// RHS : Index
         span,
 
-        // ********* Global declarations *********
-        /// main_token is 'var'
-        /// lhs is a GlobalVarDecl
-        /// rhs is initializer expression [Optional]
+        // ####### GlobalDecl #######
+
+        /// TOK : k_var
+        /// LHS : GlobalVarDecl
+        /// RHS : Expr?
         global_variable,
-        /// main_token is 'const'
-        /// lhs is type
-        /// rhs is initializer expression
+
+        /// TOK : k_const
+        /// LHS : Type
+        /// RHS : Expr
         global_constant,
-        /// main_token is 'override'
-        /// lhs is GlobalOverrideDecl
-        /// rhs is initializer expression
-        global_override,
-        /// main_token is 'type'
-        /// lhs is a type
+
+        /// TOK : k_override
+        /// LHS : OverrideDecl
+        /// RHS : Expr
+        override,
+
+        /// TOK : k_type
+        /// LHS : Type
+        /// RHS : --
         type_alias,
-        /// main_token is 'const_assert'
-        /// lhs is an expression
+
+        /// TOK : k_const_assert
+        /// LHS : Expr
+        /// RHS : --
         const_assert,
-        /// main_token is 'struct'
-        /// lhs is struct members span
+
+        /// TOK : k_struct
+        /// LHS : span(struct_member)
+        /// RHS : --
         struct_decl,
-        /// main_token is member name (identifier)
-        /// lhs is attributes span
-        /// rhs is type
+        /// TOK : ident
+        /// LHS : span(Attribute)
+        /// RHS : Type
         struct_member,
-        /// main_token is 'fn'
-        /// lhs is FnProto
-        /// rhs is body
+
+        /// TOK : k_fn
+        /// LHS : FnProto
+        /// RHS : block
         fn_decl,
-        /// main_token is param name
-        /// lhs is Attributes [Optional]
-        /// rhs is type
+        /// TOK : ident
+        /// LHS : ? Attributes
+        /// RHS : type
         fn_param,
 
-        // ********* Statements *********
-        /// main_token is 'return'
-        /// lhs is expression [Optional]
+        // ####### Statement #######
+
+        /// TOK : k_return
+        /// LHS : Expr?
+        /// RHS : --
         return_statement,
-        /// main_token is 'discard'
+
+        /// TOK : k_discard
+        /// LHS : --
+        /// RHS : --
         discard_statement,
-        /// main_token is 'loop'
-        /// lhs is body block
+
+        /// TOK : k_loop
+        /// LHS : block
+        /// RHS : --
         loop_statement,
-        /// main_token is 'continuing'
-        /// lhs is body block
+
+        /// TOK : k_continuing
+        /// LHS : block
+        /// RHS : --
         continuing_statement,
-        /// main_token is 'break'
-        /// lhs is condition expression
+
+        /// TOK : k_break
+        /// LHS : Expr
+        /// RHS : --
         break_if_statement,
-        /// main_token is 'break'
+
+        /// TOK : k_break
+        /// LHS : --
+        /// RHS : --
         break_statement,
-        /// main_token is 'continue'
+
+        /// TOK : k_continue
+        /// LHS : --
+        /// RHS : --
         continue_statement,
-        /// main_token is 'if'
-        /// lhs is condition
-        /// rhs is body
+
+        /// TOK : k_if
+        /// LHS : Expr
+        /// RHS : blcok
         if_statement,
-        /// main_token is 'if'
-        /// lhs is IfStatement
-        /// rhs is else body
+        /// RHS is else body
+        /// TOK : k_if
+        /// LHS : if_statement
+        /// RHS : blcok
         if_else_statement,
-        /// main_token is 'if'
-        /// lhs is IfStatement
-        /// rhs is if_statement, if_else_statement or if_else_if_statement
+        /// TOK : k_if
+        /// LHS : if_statement
+        /// RHS : if_statement, if_else_statement, if_else_if_statement
         if_else_if_statement,
-        /// switch lhs { rhs }
-        /// main_token is 'switch'
-        /// lhs is expression
-        /// rhs is cases span
+
+        /// TOK : k_switch
+        /// LHS : Expr
+        /// RHS : span(switch_case, switch_default, switch_case_default)
         switch_statement,
-        /// main_token is 'default'
-        /// lhs is body block
-        switch_default,
-        /// case lhs { rhs }
-        /// main_token is 'case'
-        /// lhs is cases span
-        /// lhs is body block
+        /// TOK : k_case
+        /// LHS : span(Expr)
+        /// RHS : block
         switch_case,
-        /// case lhs, default { rhs }
-        /// main_token is 'case'
-        /// lhs is cases span
-        /// lhs is body block
+        /// TOK : k_default
+        /// LHS : block
+        /// RHS : --
+        switch_default,
+        /// switch_case with default (`case 1, 2, default {}`)
+        /// TOK : k_case
+        /// LHS : span(Expr)
+        /// RHS : block
         switch_case_default,
-        /// main_token is 'var'
-        /// lhs is a GlobalVarDecl
-        /// rhs is initializer expression [Optional]
+
+        /// TOK : k_var
+        /// LHS : VarDecl
+        /// RHS : Expr?
         var_decl,
-        /// main_token is 'const'
-        /// lhs is a type [Optional]
-        /// rhs is initializer expression
+
+        /// TOK : k_const
+        /// LHS : Type?
+        /// RHS : Expr
         const_decl,
-        /// main_token is 'let'
-        /// lhs is a type [Optional]
-        /// rhs is initializer expression
+
+        /// TOK : k_let
+        /// LHS : Type?
+        /// RHS : Expr
         let_decl,
-        /// main_token is 'while'
-        /// lhs is condition expression
-        /// rhs is body block
+
+        /// TOK : k_while
+        /// LHS : Expr
+        /// RHS : block
         while_statement,
-        /// main_token is 'for'
-        /// lhs is ForHeader
-        /// rhs is body block
+
+        /// TOK : k_for
+        /// LHS : ForHeader
+        /// RHS : block
         for_statement,
-        /// main_token is '++' or '--'
-        /// lhs is expression
+
+        /// TOK : plus_plus, minus_minus
+        /// LHS : Expr
         increase_decrement_statement,
-        /// main_token is compound assignment operator
-        /// lhs is expression
-        /// rhs is expression
+
+        /// TOK : plus_equal,        minus_equal,
+        ///       times_equal,       division_equal,
+        ///       modulo_equal,      and_equal,
+        ///       or_equal,          xor_equal,
+        ///       shift_right_equal, shift_left_equal
+        /// LHS : Expr
+        /// RHS : Expr
         compound_assign_statement,
-        /// main_token is '='
-        /// lhs is expression
+
+        /// TOK : equal
+        /// LHS : Expr
+        /// RHS : --
         phony_assign_statement,
 
-        // ********* Types *********
-        /// main_token is ScalarType
+        // ####### Type #######
+
+        /// TOK : k_i32, k_u32, k_f32, k_f16, k_bool
+        /// LHS : --
+        /// RHS : --
         scalar_type,
-        /// main_token is SamplerType
+
+        /// TOK : k_sampler, k_comparison_sampler
+        /// LHS : --
+        /// RHS : --
         sampler_type,
-        /// vec2<lhs>
-        /// main_token is VectorPrefix
-        /// lhs is element type
+
+        /// TOK : k_vec2, k_vec3, k_vec4
+        /// LHS : Type
+        /// RHS : --
         vector_type,
-        /// mat2x2<lhs>
-        /// main_token is MatrixPrefix
-        /// lhs is element type
+
+        /// TOK : k_mat2x2, k_mat2x3, k_mat2x4,
+        ///       k_mat3x2, k_mat3x3, k_mat3x4,
+        ///       k_mat4x2, k_mat4x3, k_mat4x4
+        /// LHS : Type
+        /// RHS : --
         matrix_type,
-        /// atomic<lhs>
-        /// main_token is 'atomic'
-        /// lhs is element type
+
+        /// TOK : k_atomic
+        /// LHS : Type
+        /// RHS : --
         atomic_type,
-        /// array<lhs, rhs>
-        /// main_token is 'array'
-        /// lhs is element type
-        /// rhs is array size expression [Optional]
+
+        /// TOK : k_array
+        /// LHS : Type
+        /// RHS : Expr?
         array_type,
-        /// ptr<rhs.addr_space, lhs, rhs.access_mode>
-        /// main_token is 'ptr'
-        /// lhs is element type
-        /// rhs is PtrType
-        /// rhs.access_mode is [Optional]
+
+        /// TOK : k_ptr
+        /// LHS : Type
+        /// RHS : PtrType
         ptr_type,
-        /// main_token is identifier
+
+        /// TOK : ident
+        /// LHS : --
+        /// RHS : --
         user_type,
 
-        // ********* Attributes *********
-        // main_token is '@'
-        /// @const
+        // ####### Attribute #######
+
+        // TOK : attr
         attr,
-        /// @align(lhs)
-        /// lhs is an expression
+
+        /// TOK : attr
+        /// LHS : Expr
+        /// RHS : --
         attr_one_arg,
-        /// @builtin(lhs)
-        /// lhs is [TokenList.Index]
+
+        /// TOK : attr
+        /// LHS : Index(Token(BuiltinValue))
+        /// RHS : --
         attr_builtin,
-        /// @workgroup_size(lhs, rhs.y, rhs.z)
-        /// lhs is an expression
-        /// rhs is WorkgroupSize [Optional]
+
+        /// TOK : attr
+        /// LHS : WorkgroupSize
+        /// RHS : --
         attr_workgroup_size,
-        /// @workgroup(lhs, rhs)
-        /// lhs is InterpolationType   [TokenList.Index]
-        /// rhs is InterpolationSample [TokenList.Index] [Optional]
+
+        /// TOK : attr
+        /// LHS : Index(Token(InterpolationType))
+        /// RHS : Index(Token(InterpolationSample))
         attr_interpolate,
 
-        // ********* Expressions *********
-        /// lhs * rhs
-        /// main_token is *
+        // ####### Expr #######
+
+        /// TOK : *
+        /// LHS : --
+        /// RHS : --
         mul,
-        /// lhs / rhs
-        /// main_token is /
+
+        /// TOK : /
+        /// LHS : --
+        /// RHS : --
         div,
-        /// lhs % rhs
-        /// main_token is %
+
+        /// TOK : %
+        /// LHS : --
+        /// RHS : --
         mod,
-        /// lhs + rhs
-        /// main_token is +
+
+        /// TOK : +
+        /// LHS : --
+        /// RHS : --
         add,
-        /// lhs - rhs
-        /// main_token is -
+
+        /// TOK : -
+        /// LHS : --
+        /// RHS : --
         sub,
-        /// lhs << rhs
-        /// main_token is <<
+
+        /// TOK : <<
+        /// LHS : --
+        /// RHS : --
         shift_left,
-        /// lhs >> rhs
-        /// main_token is >>
+
+        /// TOK : >>
+        /// LHS : --
+        /// RHS : --
         shift_right,
-        /// lhs & rhs
-        /// main_token is &
+
+        /// TOK : &
+        /// LHS : --
+        /// RHS : --
         binary_and,
-        /// lhs | rhs
-        /// main_token is |
+
+        /// TOK : |
+        /// LHS : --
+        /// RHS : --
         binary_or,
-        /// lhs ^ rhs
-        /// main_token is ^
+
+        /// TOK : ^
+        /// LHS : --
+        /// RHS : --
         binary_xor,
-        /// lhs && rhs
-        /// main_token is &&
+
+        /// TOK : &&
+        /// LHS : --
+        /// RHS : --
         circuit_and,
-        /// lhs || rhs
-        /// main_token is ||
+
+        /// TOK : ||
+        /// LHS : --
+        /// RHS : --
         circuit_or,
-        /// !lhs
-        /// main_token is !
+
+        /// TOK : !
+        /// LHS : --
+        /// RHS : --
         not,
-        /// -lhs
-        /// main_token is -
+
+        /// TOK : -
+        /// LHS : --
+        /// RHS : --
         negate,
-        /// *lhs
-        /// main_token is *
+
+        /// TOK : *
+        /// LHS : --
+        /// RHS : --
         deref,
-        /// &lhs
-        /// main_token is &
+
+        /// TOK : &
+        /// LHS : --
+        /// RHS : --
         addr_of,
-        /// lhs == rhs
-        /// main_token is ==
+
+        /// TOK : ==
+        /// LHS : --
+        /// RHS : --
         equal,
-        /// lhs != rhs
-        /// main_token is !=
+
+        /// TOK : !=
+        /// LHS : --
+        /// RHS : --
         not_equal,
-        /// lhs < rhs
-        /// main_token is <
+
+        /// TOK : <
+        /// LHS : --
+        /// RHS : --
         less,
-        /// lhs <= rhs
-        /// main_token is <=
+
+        /// TOK : <=
+        /// LHS : --
+        /// RHS : --
         less_equal,
-        /// lhs > rhs
-        /// main_token is >
+
+        /// TOK : >
+        /// LHS : --
+        /// RHS : --
         greater,
-        /// lhs >= rhs
-        /// main_token is >=
+
+        /// TOK : >=
+        /// LHS : --
+        /// RHS : --
         greater_equal,
-        /// vec2<f32>(2)
-        /// main_token is an identifier or
-        /// type constructor ('array', ScalarType, VectorPrefix or MatrixPrefix).
+
+        /// for identifier, array without element type specified,
+        /// vector prefix (e.g. vec2) and matrix prefix (e.g. mat2x2) LHS is null
+        /// see callExpr in Parser.zig if you don't understand this
         ///
-        /// lhs is TypeSpecifierWithoutIdent [Optional]
-        /// rhs is arguments (expression span)
+        /// TOK : ident, k_array, 'scalar keywords', 'vector keywords', 'matrix keywords'
+        /// LHS : (scalar_type, vector_type, matrix_type, array_type)?
+        /// RHS : arguments (Expr span)
         call_expr,
-        /// bitcast<f32>(5)
-        /// main_token is 'bitcast'
-        /// lhs is destination type
-        /// rhs is an expression
+
+        /// TOK : k_bitcast
+        /// LHS : Type
+        /// RHS : Expr
         bitcast_expr,
-        /// main_token is an identifier
+
+        /// TOK : ident
+        /// LHS : --
+        /// RHS : --
         ident_expr,
-        /// *lhs
-        /// main_token is '*'
-        /// lhs is expression
+
+        /// TOK : '*'
+        /// LHS :  Expr
         deref_expr,
-        /// &lhs
-        /// main_token is '&'
-        /// lhs is expression
+
+        /// TOK : '&'
+        /// LHS :  Expr
         addr_of_expr,
-        /// lhs.some_ident
-        /// main_token is identifier
-        /// lhs is prefix expression
+
+        /// LHS is prefix expression
+        /// TOK : ident
+        /// LHS : Expr
         component_access,
-        /// lhs[rhs]
-        /// main_token is '['
-        /// lhs is prefix expression
-        /// rhs is expression
+
+        /// LHS is prefix expression
+        /// TOK : bracket_left
+        /// LHS : Expr
+        /// RHS : Expr
         index_access,
 
-        // ********* Literals *********
-        /// main_token is 'true' or 'false'
+        // ####### Literals #######
+
+        /// TOK : k_true, k_false
+        /// LHS : --
+        /// RHS : --
         bool_literal,
-        /// main_token is a number litreal
+        /// TOK : number
+        /// LHS : --
+        /// RHS : --
         number_literal,
     };
 
@@ -375,7 +495,7 @@ pub const Node = struct {
         type: Index = null_index,
     };
 
-    pub const GlobalOverrideDecl = struct {
+    pub const OverrideDecl = struct {
         attrs: Index = null_index,
         type: Index = null_index,
     };
@@ -386,7 +506,8 @@ pub const Node = struct {
     };
 
     pub const WorkgroupSize = struct {
-        y: Index,
+        x: Index,
+        y: Index = null_index,
         z: Index = null_index,
     };
 

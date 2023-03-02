@@ -53,7 +53,7 @@ test "variable & expressions" {
     const expr = ast.getToken(ast.extra.items[@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".lhs + 1]);
     try expect(std.mem.eql(u8, "expr", expr.loc.slice(source)));
     try expect(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".tag == .global_variable);
-    try expect(ast.getToken(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .keyword_var);
+    try expect(ast.getToken(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .k_var);
 
     const @"1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".rhs);
     try expect(@"1 + 5 + 2 * 3 > 6 >> 7".tag == .greater);

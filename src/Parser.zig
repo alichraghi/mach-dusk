@@ -121,17 +121,17 @@ pub fn attribute(p: *Parser) !?Ast.Index {
             _ = try p.expectToken(.paren_left);
 
             node.tag = .attr_workgroup_size;
-            node.lhs = try p.expression() orelse {
-                try p.error_list.add(p.peekToken(0).loc, "expected workgroup_size x parameter", .{}, &.{});
-                return error.Parsing;
+            var workgroup_size = Ast.Node.WorkgroupSize{
+                .x = try p.expression() orelse {
+                    try p.error_list.add(p.peekToken(0).loc, "expected workgroup_size x parameter", .{}, &.{});
+                    return error.Parsing;
+                },
             };
 
             if (p.eatToken(.comma) != null and p.peekToken(0).tag != .paren_right) {
-                var workgroup_size = Ast.Node.WorkgroupSize{
-                    .y = try p.expression() orelse {
-                        try p.error_list.add(p.peekToken(0).loc, "expected workgroup_size y parameter", .{}, &.{});
-                        return error.Parsing;
-                    },
+                workgroup_size.y = try p.expression() orelse {
+                    try p.error_list.add(p.peekToken(0).loc, "expected workgroup_size y parameter", .{}, &.{});
+                    return error.Parsing;
                 };
 
                 if (p.eatToken(.comma) != null and p.peekToken(0).tag != .paren_right) {
@@ -142,10 +142,9 @@ pub fn attribute(p: *Parser) !?Ast.Index {
 
                     _ = p.eatToken(.comma);
                 }
-
-                node.rhs = try p.addExtra(workgroup_size);
             }
 
+            node.lhs = try p.addExtra(workgroup_size);
             _ = try p.expectToken(.paren_right);
         },
         .interpolate => {
@@ -216,7 +215,7 @@ pub fn expectInterpolationSample(p: *Parser) !Ast.Index {
 }
 
 pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
-    const var_token = p.eatToken(.keyword_var) orelse return null;
+    const var_token = p.eatToken(.k_var) orelse return null;
 
     // qualifier
     var addr_space = Ast.null_index;
@@ -266,7 +265,7 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
 }
 
 pub fn globalConstDecl(p: *Parser) !?Ast.Index {
-    const const_token = p.eatToken(.keyword_const) orelse return null;
+    const const_token = p.eatToken(.k_const) orelse return null;
 
     _ = try p.expectToken(.ident);
     var const_type = Ast.null_index;
@@ -294,7 +293,7 @@ pub fn globalConstDecl(p: *Parser) !?Ast.Index {
 }
 
 pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
-    const override_token = p.eatToken(.keyword_override) orelse return null;
+    const override_token = p.eatToken(.k_override) orelse return null;
 
     // name, type
     _ = try p.expectToken(.ident);
@@ -316,12 +315,12 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
         };
     }
 
-    const extra = try p.addExtra(Ast.Node.GlobalOverrideDecl{
+    const extra = try p.addExtra(Ast.Node.OverrideDecl{
         .attrs = attrs orelse Ast.null_index,
         .type = override_type,
     });
     return try p.addNode(.{
-        .tag = .global_override,
+        .tag = .override,
         .main_token = override_token,
         .lhs = extra,
         .rhs = initializer,
@@ -329,7 +328,7 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
 }
 
 pub fn typeAliasDecl(p: *Parser) !?Ast.Index {
-    const type_token = p.eatToken(.keyword_type) orelse return null;
+    const type_token = p.eatToken(.k_type) orelse return null;
     _ = try p.expectToken(.ident);
     _ = try p.expectToken(.equal);
     const value = try p.expectTypeSpecifier();
@@ -341,7 +340,7 @@ pub fn typeAliasDecl(p: *Parser) !?Ast.Index {
 }
 
 pub fn structDecl(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_struct) orelse return null;
+    const main_token = p.eatToken(.k_struct) orelse return null;
     _ = try p.expectToken(.ident);
     _ = try p.expectToken(.brace_left);
 
@@ -390,7 +389,7 @@ pub fn structMember(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
 }
 
 pub fn constAssert(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_const_assert) orelse return null;
+    const main_token = p.eatToken(.k_const_assert) orelse return null;
     const expr = try p.expression() orelse {
         try p.error_list.add(
             p.peekToken(0).loc,
@@ -408,7 +407,7 @@ pub fn constAssert(p: *Parser) !?Ast.Index {
 }
 
 pub fn functionDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
-    const fn_token = p.eatToken(.keyword_fn) orelse return null;
+    const fn_token = p.eatToken(.k_fn) orelse return null;
     _ = try p.expectToken(.ident);
 
     _ = try p.expectToken(.paren_left);
@@ -573,13 +572,13 @@ pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index {
 }
 
 pub fn breakStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_break) orelse return null;
+    const main_token = p.eatToken(.k_break) orelse return null;
     return try p.addNode(.{ .tag = .break_statement, .main_token = main_token });
 }
 
 pub fn breakIfStatement(p: *Parser) !?Ast.Index {
-    if (p.peekToken(0).tag == .keyword_break and
-        p.peekToken(1).tag == .keyword_if)
+    if (p.peekToken(0).tag == .k_break and
+        p.peekToken(1).tag == .k_if)
     {
         const main_token = p.advanceToken();
         _ = p.advanceToken();
@@ -602,12 +601,12 @@ pub fn breakIfStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn continueStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_continue) orelse return null;
+    const main_token = p.eatToken(.k_continue) orelse return null;
     return try p.addNode(.{ .tag = .continue_statement, .main_token = main_token });
 }
 
 pub fn continuingStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_continuing) orelse return null;
+    const main_token = p.eatToken(.k_continuing) orelse return null;
     const body = try p.expectBlock();
     return try p.addNode(.{
         .tag = .continuing_statement,
@@ -617,12 +616,12 @@ pub fn continuingStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn discardStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_discard) orelse return null;
+    const main_token = p.eatToken(.k_discard) orelse return null;
     return try p.addNode(.{ .tag = .discard_statement, .main_token = main_token });
 }
 
 pub fn forStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_for) orelse return null;
+    const main_token = p.eatToken(.k_for) orelse return null;
     _ = try p.expectToken(.paren_left);
 
     // for init
@@ -657,7 +656,7 @@ pub fn forStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn ifStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_if) orelse return null;
+    const main_token = p.eatToken(.k_if) orelse return null;
 
     const cond = try p.expression() orelse {
         try p.error_list.add(
@@ -678,13 +677,13 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
         return error.Parsing;
     };
 
-    if (p.eatToken(.keyword_else)) |_| {
+    if (p.eatToken(.k_else)) |_| {
         const extra = try p.addExtra(Ast.Node.IfStatement{
             .cond = cond,
             .body = body,
         });
 
-        if (p.peekToken(0).tag == .keyword_if) {
+        if (p.peekToken(0).tag == .k_if) {
             const else_if = try p.ifStatement() orelse unreachable;
             return try p.addNode(.{
                 .tag = .if_else_if_statement,
@@ -721,7 +720,7 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn loopStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_loop) orelse return null;
+    const main_token = p.eatToken(.k_loop) orelse return null;
     const body = try p.expectBlock();
     return try p.addNode(.{
         .tag = .loop_statement,
@@ -731,7 +730,7 @@ pub fn loopStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn returnStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_return) orelse return null;
+    const main_token = p.eatToken(.k_return) orelse return null;
     const expr = try p.expression() orelse Ast.null_index;
     return try p.addNode(.{
         .tag = .return_statement,
@@ -741,7 +740,7 @@ pub fn returnStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn switchStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_switch) orelse return null;
+    const main_token = p.eatToken(.k_switch) orelse return null;
 
     const expr = try p.expression() orelse {
         try p.error_list.add(
@@ -758,7 +757,7 @@ pub fn switchStatement(p: *Parser) !?Ast.Index {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
-        if (p.eatToken(.keyword_default)) |default_token| {
+        if (p.eatToken(.k_default)) |default_token| {
             _ = p.eatToken(.colon);
             const default_body = try p.expectBlock();
             try p.scratch.append(p.allocator, try p.addNode(.{
@@ -766,13 +765,13 @@ pub fn switchStatement(p: *Parser) !?Ast.Index {
                 .main_token = default_token,
                 .lhs = default_body,
             }));
-        } else if (p.eatToken(.keyword_case)) |case_token| {
+        } else if (p.eatToken(.k_case)) |case_token| {
             const cases_scratch_top = p.scratch.items.len;
 
             var has_default = false;
             while (true) {
                 const case_expr = try p.expression() orelse {
-                    if (p.eatToken(.keyword_default)) |_| continue;
+                    if (p.eatToken(.k_default)) |_| continue;
                     break;
                 };
                 _ = p.eatToken(.comma);
@@ -807,7 +806,7 @@ pub fn switchStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn varStatement(p: *Parser) !?Ast.Index {
-    if (p.eatToken(.keyword_var)) |var_token| {
+    if (p.eatToken(.k_var)) |var_token| {
         var addr_space = Ast.null_index;
         var access_mode = Ast.null_index;
         if (p.eatToken(.less_than)) |_| {
@@ -852,7 +851,7 @@ pub fn varStatement(p: *Parser) !?Ast.Index {
         });
     }
 
-    const const_let_token = p.eatToken(.keyword_const) orelse p.eatToken(.keyword_let) orelse return null;
+    const const_let_token = p.eatToken(.k_const) orelse p.eatToken(.k_let) orelse return null;
     _ = try p.expectToken(.ident);
     var const_let_type = Ast.null_index;
     if (p.eatToken(.colon)) |_| {
@@ -871,7 +870,7 @@ pub fn varStatement(p: *Parser) !?Ast.Index {
     };
 
     return try p.addNode(.{
-        .tag = if (p.ast.getToken(const_let_token).tag == .keyword_const)
+        .tag = if (p.ast.getToken(const_let_token).tag == .k_const)
             .const_decl
         else
             .let_decl,
@@ -952,7 +951,7 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
 }
 
 pub fn whileStatement(p: *Parser) !?Ast.Index {
-    const main_token = p.eatToken(.keyword_while) orelse return null;
+    const main_token = p.eatToken(.k_while) orelse return null;
     const cond = try p.expression() orelse {
         try p.error_list.add(
             p.peekToken(0).loc,
@@ -1006,20 +1005,20 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
 
     const main_token = p.tok_i;
     switch (p.ast.getToken(main_token).tag) {
-        .keyword_i32,
-        .keyword_u32,
-        .keyword_f32,
-        .keyword_f16,
-        .keyword_bool,
+        .k_i32,
+        .k_u32,
+        .k_f32,
+        .k_f16,
+        .k_bool,
         => {
             _ = p.advanceToken();
             return try p.addNode(.{ .tag = .scalar_type, .main_token = main_token });
         },
-        .keyword_sampler, .keyword_comparison_sampler => {
+        .k_sampler, .k_comparison_sampler => {
             _ = p.advanceToken();
             return try p.addNode(.{ .tag = .sampler_type, .main_token = main_token });
         },
-        .keyword_atomic => {
+        .k_atomic => {
             _ = p.advanceToken();
             _ = try p.expectToken(.less_than);
             const elem_type = try p.expectTypeSpecifier();
@@ -1030,7 +1029,7 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
                 .lhs = elem_type,
             });
         },
-        .keyword_array => {
+        .k_array => {
             _ = p.advanceToken();
             _ = try p.expectToken(.less_than);
             const elem_type = try p.expectTypeSpecifier();
@@ -1054,7 +1053,7 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
                 .rhs = size,
             });
         },
-        .keyword_ptr => {
+        .k_ptr => {
             _ = p.advanceToken();
             _ = try p.expectToken(.less_than);
 
@@ -1084,9 +1083,9 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
 
 pub fn isVectorPrefix(p: *Parser) bool {
     return switch (p.peekToken(0).tag) {
-        .keyword_vec2,
-        .keyword_vec3,
-        .keyword_vec4,
+        .k_vec2,
+        .k_vec3,
+        .k_vec4,
         => true,
         else => false,
     };
@@ -1094,15 +1093,15 @@ pub fn isVectorPrefix(p: *Parser) bool {
 
 pub fn isMatrixPrefix(p: *Parser) bool {
     return switch (p.peekToken(0).tag) {
-        .keyword_mat2x2,
-        .keyword_mat2x3,
-        .keyword_mat2x4,
-        .keyword_mat3x2,
-        .keyword_mat3x3,
-        .keyword_mat3x4,
-        .keyword_mat4x2,
-        .keyword_mat4x3,
-        .keyword_mat4x4,
+        .k_mat2x2,
+        .k_mat2x3,
+        .k_mat2x4,
+        .k_mat3x2,
+        .k_mat3x3,
+        .k_mat3x4,
+        .k_mat4x2,
+        .k_mat4x3,
+        .k_mat4x4,
         => true,
         else => false,
     };
@@ -1167,7 +1166,7 @@ pub fn callExpr(p: *Parser) !?Ast.Index {
     else if (p.peekToken(1).tag != .less_than and
         (p.isVectorPrefix() or
         p.isMatrixPrefix() or
-        p.peekToken(0).tag == .keyword_array))
+        p.peekToken(0).tag == .k_array))
     {
         _ = p.advanceToken();
     } else {
@@ -1266,7 +1265,7 @@ pub fn primaryExpr(p: *Parser) !?Ast.Index {
     const main_token = p.tok_i;
     if (try p.callExpr()) |call| return call;
     switch (p.ast.getToken(main_token).tag) {
-        .keyword_true, .keyword_false => {
+        .k_true, .k_false => {
             _ = p.advanceToken();
             return try p.addNode(.{ .tag = .bool_literal, .main_token = main_token });
         },
@@ -1274,7 +1273,7 @@ pub fn primaryExpr(p: *Parser) !?Ast.Index {
             _ = p.advanceToken();
             return try p.addNode(.{ .tag = .number_literal, .main_token = main_token });
         },
-        .keyword_bitcast => {
+        .k_bitcast => {
             _ = p.advanceToken();
             _ = try p.expectToken(.less_than);
             const dest_type = try p.expectTypeSpecifier();
@@ -1557,11 +1556,11 @@ fn findNextGlobal(p: *Parser) void {
     var level: Ast.Index = 0;
     while (true) {
         switch (p.peekToken(0).tag) {
-            .keyword_fn,
-            .keyword_var,
-            .keyword_const,
-            .keyword_override,
-            .keyword_struct,
+            .k_fn,
+            .k_var,
+            .k_const,
+            .k_override,
+            .k_struct,
             .attr,
             => {
                 if (level == 0) return;

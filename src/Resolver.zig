@@ -107,9 +107,10 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Node.Index, 
     const decl_token = self.declNameToken(decl_node_i).?;
     const decl_name = decl_token.loc.asStr(self.ast.source);
     for (scope_items) |redecl_node_i| {
+        assert(decl_node_i != redecl_node_i);
         const redecl_token = self.declNameToken(redecl_node_i).?;
         const redecl_name = redecl_token.loc.asStr(self.ast.source);
-        if (decl_node_i != redecl_node_i and std.mem.eql(u8, decl_name, redecl_name)) {
+        if (std.mem.eql(u8, decl_name, redecl_name)) {
             try self.error_list.add(
                 redecl_token.loc,
                 "redeclaration of '{s}'",

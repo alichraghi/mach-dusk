@@ -51,8 +51,7 @@ pub fn add(self: *ErrorList, loc: Token.Loc, comptime err_fmt: []const u8, fmt_a
     try term.setColor(b, .Green);
     try b.writeByte('^');
     try b.writeByteNTimes('~', loc.end - loc.start - 1);
-
-    if (notes.len == 0) try b.writeByte('\n');
+    try b.writeByte('\n');
 
     // notes
     for (notes) |note| {

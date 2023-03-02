@@ -301,7 +301,7 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
     }
 
     // name, type
-    _ = try p.expectToken(.ident);
+    const name_token = try p.expectToken(.ident);
     var var_type = null_index;
     if (p.eatToken(.colon)) |_| {
         var_type = try p.expectTypeSpecifier();
@@ -322,6 +322,7 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
 
     const extra = try p.addExtra(Ast.Node.GlobalVarDecl{
         .attrs = attrs orelse null_index,
+        .name = name_token,
         .addr_space = addr_space,
         .access_mode = access_mode,
         .type = var_type,
@@ -355,7 +356,7 @@ pub fn globalConstDecl(p: *Parser) !?Ast.Node.Index {
     };
 
     return try p.addNode(.{
-        .tag = .global_variable,
+        .tag = .global_constant,
         .main_token = const_token,
         .lhs = const_type,
         .rhs = initializer,
@@ -390,7 +391,7 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Node.Index) !?Ast.Node.Index {
         .type = override_type,
     });
     return try p.addNode(.{
-        .tag = .global_variable,
+        .tag = .global_override,
         .main_token = override_token,
         .lhs = extra,
         .rhs = initializer,
@@ -908,7 +909,7 @@ pub fn varStatement(p: *Parser) !?Ast.Node.Index {
             _ = try p.expectToken(.greater_than);
         }
 
-        _ = try p.expectToken(.ident);
+        const name_token = try p.expectToken(.ident);
         var var_type = null_index;
         if (p.eatToken(.colon)) |_| {
             var_type = try p.expectTypeSpecifier();
@@ -928,6 +929,7 @@ pub fn varStatement(p: *Parser) !?Ast.Node.Index {
         }
 
         const extra = try p.addExtra(Ast.Node.VarDecl{
+            .name = name_token,
             .addr_space = addr_space,
             .access_mode = access_mode,
             .type = var_type,

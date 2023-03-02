@@ -108,7 +108,7 @@ pub const Node = struct {
         /// lhs is an expression
         const_assert,
         /// main_token is 'struct'
-        /// lhs is struct members
+        /// lhs is struct members span
         struct_decl,
         /// main_token is member name (identifier)
         /// lhs is attributes span
@@ -361,13 +361,14 @@ pub const Node = struct {
 
     pub const GlobalVarDecl = struct {
         attrs: Index = null_index,
+        name: TokenList.Index,
         addr_space: TokenList.Index = null_index,
         access_mode: TokenList.Index = null_index,
         type: Index = null_index,
     };
 
     pub const VarDecl = struct {
-        attrs: Index = null_index,
+        name: TokenList.Index,
         addr_space: TokenList.Index = null_index,
         access_mode: TokenList.Index = null_index,
         type: Index = null_index,

@@ -50,6 +50,8 @@ test "variable & expressions" {
     try expect(root.lhs + 1 == root.rhs);
 
     const @"var expr = 1 + 5 + 2 * 3 > 6 >> 7" = ast.nodes.get(ast.extra_data.items[root.lhs]);
+    const expr = ast.tokens.get(ast.extra_data.items[@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".lhs + 1]);
+    try expect(std.mem.eql(u8, "expr", expr.loc.asStr(source)));
     try expect(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".tag == .global_variable);
     try expect(ast.tokens.get(@"var expr = 1 + 5 + 2 * 3 > 6 >> 7".main_token).tag == .keyword_var);
 

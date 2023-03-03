@@ -3,42 +3,115 @@ const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
+
 const Ast = @This();
 
-allocator: std.mem.Allocator,
+pub const NodeList = std.MultiArrayList(Node);
+pub const TokenList = std.MultiArrayList(Token);
+
 source: [:0]const u8,
-tokens: std.ArrayListUnmanaged(Token) = .{},
-nodes: std.MultiArrayList(Node) = .{},
-extra: std.ArrayListUnmanaged(Index) = .{},
+tokens: TokenList.Slice,
+nodes: NodeList.Slice,
+extra: []const Index,
+
+pub fn deinit(tree: *Ast, allocator: std.mem.Allocator) void {
+    tree.tokens.deinit(allocator);
+    tree.nodes.deinit(allocator);
+    allocator.free(tree.extra);
+    tree.* = undefined;
+}
 
 /// parses a TranslationUnit (WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
-    var p = try Parser.init(allocator, source);
-    defer p.deinit();
-    return p.parseRoot();
+    const estimated_tokens = source.len / 8;
+    var tokens = std.MultiArrayList(Token){};
+    try tokens.ensureTotalCapacity(allocator, estimated_tokens);
+
+    var tokenizer = Tokenizer.init(source);
+    while (true) {
+        const tok = tokenizer.next();
+        try tokens.append(allocator, tok);
+        if (tok.tag == .eof) break;
+    }
+
+    var p = Parser{
+        .allocator = allocator,
+        .source = source,
+        .tok_i = 0,
+        .tokens = tokens,
+        .nodes = .{},
+        .extra = .{},
+        .scratch = .{},
+        .error_list = .{ .allocator = allocator, .source = source },
+    };
+    defer {
+        p.scratch.deinit(p.allocator);
+        p.error_list.deinit();
+    }
+
+    // TODO: make sure tokens:nodes retio is right
+    const estimated_node_count = (tokens.len + 2) / 2;
+    try p.nodes.ensureTotalCapacity(allocator, estimated_node_count);
+
+    try p.parseRoot();
+
+    return Ast{
+        .source = source,
+        .tokens = tokens.toOwnedSlice(),
+        .nodes = p.nodes.toOwnedSlice(),
+        .extra = try p.extra.toOwnedSlice(allocator),
+    };
 }
 
-pub fn resolve(ast: Ast) !void {
+pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !void {
     var resolver = Resolver{
-        .ast = &ast,
+        .ast = &tree,
         .error_list = .{
-            .allocator = ast.allocator,
-            .source = ast.source,
+            .allocator = allocator,
+            .source = tree.source,
         },
     };
     defer resolver.deinit();
     try resolver.resolveRoot();
 }
 
-pub fn deinit(self: *Ast) void {
-    self.tokens.deinit(self.allocator);
-    self.nodes.deinit(self.allocator);
-    self.extra.deinit(self.allocator);
+pub fn spanToList(tree: Ast, span: Ast.Index) []const Ast.Index {
+    std.debug.assert(tree.nodeTag(span) == .span);
+    return tree.extra[tree.nodeLHS(span)..tree.nodeRHS(span)];
 }
 
-/// returns EOF Token if `i > tokens.len`
-pub fn getToken(self: Ast, i: Index) Token {
-    return self.tokens.items[std.math.min(i, self.tokens.items.len)];
+pub fn extraData(tree: Ast, comptime T: type, index: Ast.Index) T {
+    const fields = std.meta.fields(T);
+    var result: T = undefined;
+    inline for (fields, 0..) |field, i| {
+        comptime std.debug.assert(field.type == Ast.Index);
+        @field(result, field.name) = tree.extra[index + i];
+    }
+    return result;
+}
+
+pub fn tokenTag(tree: Ast, i: Index) Token.Tag {
+    return tree.tokens.items(.tag)[i];
+}
+
+pub fn tokenLoc(tree: Ast, i: Index) Token.Loc {
+    return tree.tokens.items(.loc)[i];
+}
+
+pub fn nodeTag(tree: Ast, i: Index) Node.Tag {
+    return tree.nodes.items(.tag)[i];
+}
+
+pub fn nodeToken(tree: Ast, i: Index) Index {
+    return tree.nodes.items(.main_token)[i];
+}
+
+pub fn nodeLHS(tree: Ast, i: Index) Index {
+    return tree.nodes.items(.lhs)[i];
+}
+
+pub fn nodeRHS(tree: Ast, i: Index) Index {
+    return tree.nodes.items(.rhs)[i];
 }
 
 pub const Index = u32;

@@ -13,7 +13,7 @@ pub fn deinit(self: *Resolver) void {
 }
 
 pub fn resolveRoot(self: *Resolver) !void {
-    const global_items = self.spanToList(0);
+    const global_items = self.ast.spanToList(0);
 
     for (global_items, 0..) |node_i, i| {
         try self.checkRedeclaration(global_items[i + 1 ..], node_i);
@@ -26,35 +26,32 @@ pub fn resolveRoot(self: *Resolver) !void {
 }
 
 pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
-    const node = self.ast.nodes.get(node_i);
-
-    switch (node.tag) {
+    switch (self.ast.nodeTag(node_i)) {
         .global_variable => {}, // TODO
         .struct_decl => try self.structDecl(parent_scope, node_i),
-        else => std.debug.print("Global Decl TODO: {}\n", .{node.tag}),
+        else => std.debug.print("Global Decl TODO: {}\n", .{self.ast.nodeTag(node_i)}),
     }
 }
 
-pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
-    const node = self.ast.nodes.get(node_i);
+pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.Index) !void {
+    const member_list = self.ast.spanToList(self.ast.nodeLHS(node));
+    for (member_list, 0..) |member_node, i| {
+        try self.checkRedeclaration(member_list[i + 1 ..], member_node);
 
-    const member_list = self.spanToList(node.lhs);
-    for (member_list, 0..) |member_i, i| {
-        try self.checkRedeclaration(member_list[i + 1 ..], member_i);
-        const member = self.ast.nodes.get(member_i);
-        const member_type = self.ast.nodes.get(member.rhs);
-        const member_token = self.ast.getToken(member_type.main_token);
-        const member_name = member_token.loc.slice(self.ast.source);
-        switch (member_type.tag) {
+        const member_loc = self.ast.tokenLoc(self.ast.nodeToken(member_node));
+        const member_name = member_loc.slice(self.ast.source);
+        const member_type_node = self.ast.nodeRHS(member_node);
+
+        switch (self.ast.nodeTag(member_type_node)) {
             .scalar_type,
             .vector_type,
             .matrix_type,
             .atomic_type,
             => {},
-            .array_type => if (member_type.rhs == Ast.null_index and i != member_list.len - 1) {
+            .array_type => if (self.ast.nodeRHS(member_type_node) == Ast.null_index and i != member_list.len - 1) {
                 try self.error_list.add(
-                    member_token.loc,
-                    "runtime-sized array type, must be the last member of the structure",
+                    member_loc,
+                    "struct member with runtime-sized array type, must be the last member of the structure",
                     .{},
                     &.{},
                 );
@@ -62,7 +59,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.
             .user_type => {
                 _ = self.findDeclNode(parent_scope, member_name) orelse {
                     try self.error_list.add(
-                        member_token.loc,
+                        member_loc,
                         "use of undeclared identifier '{s}'",
                         .{member_name},
                         &.{},
@@ -72,7 +69,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.
             },
             else => {
                 try self.error_list.add(
-                    member_token.loc,
+                    member_loc,
                     "invalid struct member type '{s}'",
                     .{member_name},
                     &.{},
@@ -85,23 +82,23 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.
 pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Index, name: []const u8) ?Ast.Index {
     for (scope_items) |node| {
         const node_token = self.declNameToken(node) orelse continue;
-        if (std.mem.eql(u8, name, node_token.loc.slice(self.ast.source))) {
+        if (std.mem.eql(u8, name, self.ast.tokenLoc(node_token).slice(self.ast.source))) {
             return node;
         }
     }
     return null;
 }
 
-pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_node_i: Ast.Index) !void {
-    const decl_token = self.declNameToken(decl_node_i).?;
-    const decl_name = decl_token.loc.slice(self.ast.source);
-    for (scope_items) |redecl_node_i| {
-        assert(decl_node_i != redecl_node_i);
-        const redecl_token = self.declNameToken(redecl_node_i).?;
-        const redecl_name = redecl_token.loc.slice(self.ast.source);
+pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_node: Ast.Index) !void {
+    const decl_token_loc = self.ast.tokenLoc(self.declNameToken(decl_node).?);
+    const decl_name = decl_token_loc.slice(self.ast.source);
+    for (scope_items) |redecl_node| {
+        assert(decl_node != redecl_node);
+        const redecl_token_loc = self.ast.tokenLoc(self.declNameToken(redecl_node).?);
+        const redecl_name = redecl_token_loc.slice(self.ast.source);
         if (std.mem.eql(u8, decl_name, redecl_name)) {
             try self.error_list.add(
-                redecl_token.loc,
+                redecl_token_loc,
                 "redeclaration of '{s}'",
                 .{decl_name},
                 &.{"first declared here"}, // TODO
@@ -110,33 +107,16 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
     }
 }
 
-pub fn declNameToken(self: *Resolver, node_i: Ast.Index) ?Token {
-    const node = self.ast.nodes.get(node_i);
-    return switch (node.tag) {
-        .global_variable => self.ast.getToken(self.extraData(node.lhs, Ast.Node.GlobalVarDecl).name),
+pub fn declNameToken(self: *Resolver, node: Ast.Index) ?Ast.Index {
+    return switch (self.ast.nodeTag(node)) {
+        .global_variable => self.ast.extraData(Ast.Node.GlobalVarDecl, self.ast.nodeLHS(node)).name,
         .struct_decl,
         .fn_decl,
         .global_constant,
         .override,
         .type_alias,
-        => self.ast.getToken(node.main_token + 1),
-        .struct_member => self.ast.getToken(node.main_token),
+        => self.ast.nodeToken(node) + 1,
+        .struct_member => self.ast.nodeToken(node),
         else => null,
     };
-}
-
-pub fn spanToList(self: *Resolver, span: Ast.Index) []const Ast.Index {
-    const node = self.ast.nodes.get(span);
-    assert(node.tag == .span);
-    return self.ast.extra.items[node.lhs..node.rhs];
-}
-
-pub fn extraData(self: *Resolver, index: Ast.Index, comptime T: type) T {
-    const fields = std.meta.fields(T);
-    var result: T = undefined;
-    inline for (fields, 0..) |field, i| {
-        comptime assert(field.type == Ast.Index);
-        @field(result, field.name) = self.ast.extra.items[index + i];
-    }
-    return result;
 }

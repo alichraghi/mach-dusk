@@ -3,9 +3,7 @@ const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
-
 const Ast = @This();
-pub const Index = u32;
 
 allocator: std.mem.Allocator,
 source: [:0]const u8,
@@ -13,71 +11,37 @@ tokens: std.ArrayListUnmanaged(Token) = .{},
 nodes: std.MultiArrayList(Node) = .{},
 extra: std.ArrayListUnmanaged(Index) = .{},
 
-/// parses TranslationUnit(WGSL Program)
+/// parses a TranslationUnit (WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
-    var p = Parser{
-        .allocator = allocator,
-        .ast = .{ .allocator = allocator, .source = source },
-        .error_list = .{ .allocator = allocator, .source = source },
+    var p = try Parser.init(allocator, source);
+    defer p.deinit();
+    return p.parseRoot();
+}
+
+pub fn resolve(ast: Ast) !void {
+    var resolver = Resolver{
+        .ast = &ast,
+        .error_list = .{
+            .allocator = ast.allocator,
+            .source = ast.source,
+        },
     };
-
-    var tokenizer = Tokenizer.init(source);
-    const estimated_tokens = source.len / 8;
-    try p.ast.tokens.ensureTotalCapacity(allocator, estimated_tokens);
-    while (true) {
-        const t = tokenizer.next();
-        try p.ast.tokens.append(allocator, t);
-        if (t.tag == .eof) break;
-    }
-
-    defer {
-        p.scratch.deinit(allocator);
-        p.error_list.deinit();
-    }
-    errdefer p.ast.deinit();
-
-    const estimated_nodes = (p.ast.tokens.items.len + 2) / 2;
-    try p.ast.nodes.ensureTotalCapacity(allocator, estimated_nodes);
-
-    const root = p.addNode(.{
-        .tag = .span,
-        .main_token = undefined,
-    }) catch unreachable;
-
-    const scratch_top = p.scratch.items.len;
-    defer p.scratch.shrinkRetainingCapacity(scratch_top);
-
-    while (p.peekToken(0).tag != .eof) {
-        const decl = try p.expectGlobalDeclRecoverable() orelse continue;
-        try p.scratch.append(allocator, decl);
-    }
-
-    if (p.error_list.errors.items.len > 0) {
-        try p.error_list.flush();
-        return error.Parsing;
-    }
-
-    const list = p.scratch.items[scratch_top..];
-    try p.ast.extra.appendSlice(allocator, list);
-    p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len - list.len);
-    p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len);
-
-    // resolve
-    try Resolver.resolve(allocator, p.ast);
-
-    return p.ast;
+    defer resolver.deinit();
+    try resolver.resolveRoot();
 }
 
 pub fn deinit(self: *Ast) void {
+    self.tokens.deinit(self.allocator);
     self.nodes.deinit(self.allocator);
     self.extra.deinit(self.allocator);
-    self.tokens.deinit(self.allocator);
 }
 
+/// returns EOF Token if `i > tokens.len`
 pub fn getToken(self: Ast, i: Index) Token {
     return self.tokens.items[std.math.min(i, self.tokens.items.len)];
 }
 
+pub const Index = u32;
 pub const null_index: Index = 0;
 pub const Node = struct {
     tag: Tag,

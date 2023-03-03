@@ -2,6 +2,7 @@
 const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
+const Tokenizer = @import("Tokenizer.zig");
 const ErrorList = @import("ErrorList.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const fieldNames = std.meta.fieldNames;
@@ -12,6 +13,61 @@ ast: Ast,
 tok_i: Ast.Index = 0,
 error_list: ErrorList,
 scratch: std.ArrayListUnmanaged(Ast.Index) = .{},
+
+pub fn init(allocator: std.mem.Allocator, source: [:0]const u8) !Parser {
+    var p = Parser{
+        .allocator = allocator,
+        .ast = .{ .allocator = allocator, .source = source },
+        .error_list = .{ .allocator = allocator, .source = source },
+    };
+    errdefer p.deinit();
+
+    var tokenizer = Tokenizer.init(source);
+    const estimated_tokens = source.len / 8;
+    try p.ast.tokens.ensureTotalCapacity(allocator, estimated_tokens);
+    while (true) {
+        const t = tokenizer.next();
+        try p.ast.tokens.append(allocator, t);
+        if (t.tag == .eof) break;
+    }
+
+    return p;
+}
+
+pub fn deinit(p: *Parser) void {
+    p.scratch.deinit(p.allocator);
+    p.error_list.deinit();
+}
+
+pub fn parseRoot(p: *Parser) !Ast {
+    const estimated_nodes = (p.ast.tokens.items.len + 2) / 2;
+    try p.ast.nodes.ensureTotalCapacity(p.allocator, estimated_nodes);
+
+    const root = p.addNode(.{
+        .tag = .span,
+        .main_token = undefined,
+    }) catch unreachable;
+
+    const scratch_top = p.scratch.items.len;
+    defer p.scratch.shrinkRetainingCapacity(scratch_top);
+
+    while (p.peekToken(0).tag != .eof) {
+        const decl = try p.expectGlobalDeclRecoverable() orelse continue;
+        try p.scratch.append(p.allocator, decl);
+    }
+
+    if (p.error_list.errors.items.len > 0) {
+        try p.error_list.flush();
+        return error.Parsing;
+    }
+
+    const list = p.scratch.items[scratch_top..];
+    try p.ast.extra.appendSlice(p.allocator, list);
+    p.ast.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len - list.len);
+    p.ast.nodes.items(.rhs)[root] = @intCast(Ast.Index, p.ast.extra.items.len);
+
+    return p.ast;
+}
 
 pub fn expectGlobalDeclRecoverable(p: *Parser) !?Ast.Index {
     return p.expectGlobalDecl() catch |err| switch (err) {
@@ -626,17 +682,17 @@ pub fn forStatement(p: *Parser) !?Ast.Index {
     _ = try p.expectToken(.paren_left);
 
     // for init
-    const init = try p.callExpr() orelse
+    const for_init = try p.callExpr() orelse
         try p.varStatement() orelse
         try p.varUpdateStatement() orelse
         Ast.null_index;
     _ = try p.expectToken(.semicolon);
 
-    const cond = try p.expression() orelse Ast.null_index;
+    const for_cond = try p.expression() orelse Ast.null_index;
     _ = try p.expectToken(.semicolon);
 
     // for update
-    const update = try p.callExpr() orelse
+    const for_update = try p.callExpr() orelse
         try p.varUpdateStatement() orelse
         Ast.null_index;
 
@@ -644,9 +700,9 @@ pub fn forStatement(p: *Parser) !?Ast.Index {
     const body = try p.expectBlock();
 
     const extra = try p.addExtra(Ast.Node.ForHeader{
-        .init = init,
-        .cond = cond,
-        .update = update,
+        .init = for_init,
+        .cond = for_cond,
+        .update = for_update,
     });
     return try p.addNode(.{
         .tag = .@"for",

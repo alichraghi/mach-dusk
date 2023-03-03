@@ -5,34 +5,23 @@ const Token = @import("Token.zig");
 const assert = std.debug.assert;
 const Resolver = @This();
 
-arena: std.mem.Allocator,
 ast: *const Ast,
 error_list: ErrorList,
 
-pub fn resolve(allocator: std.mem.Allocator, ast: Ast) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    var resolver = Resolver{
-        .arena = arena.allocator(),
-        .ast = &ast,
-        .error_list = .{
-            .allocator = allocator,
-            .source = ast.source,
-        },
-    };
-    defer {
-        arena.deinit();
-        resolver.error_list.deinit();
-    }
+pub fn deinit(self: *Resolver) void {
+    self.error_list.deinit();
+}
 
-    const global_items = resolver.spanToList(0);
+pub fn resolveRoot(self: *Resolver) !void {
+    const global_items = self.spanToList(0);
 
     for (global_items, 0..) |node_i, i| {
-        try resolver.checkRedeclaration(global_items[i + 1 ..], node_i);
-        try resolver.globalDecl(global_items, node_i);
+        try self.checkRedeclaration(global_items[i + 1 ..], node_i);
+        try self.globalDecl(global_items, node_i);
     }
 
-    if (resolver.error_list.errors.items.len > 0) {
-        try resolver.error_list.flush();
+    if (self.error_list.errors.items.len > 0) {
+        try self.error_list.flush();
     }
 }
 
@@ -115,9 +104,7 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
                 redecl_token.loc,
                 "redeclaration of '{s}'",
                 .{decl_name},
-                &.{
-                    try std.fmt.allocPrint(self.arena, "first declared here", .{}),
-                }, // TODO
+                &.{"first declared here"}, // TODO
             );
         }
     }

@@ -3,6 +3,7 @@ const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
+const ErrorMsg = @import("ErrorMsg.zig");
 
 const Ast = @This();
 
@@ -42,18 +43,20 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
         .nodes = .{},
         .extra = .{},
         .scratch = .{},
-        .error_list = .{ .allocator = allocator, .source = source },
+        .errors = .{},
     };
-    defer {
-        p.scratch.deinit(p.allocator);
-        p.error_list.deinit();
-    }
+    defer p.deinit();
 
     // TODO: make sure tokens:nodes ratio is right
     const estimated_node_count = (tokens.len + 2) / 2;
     try p.nodes.ensureTotalCapacity(allocator, estimated_node_count);
 
-    try p.parseRoot();
+    p.parseRoot() catch |err| {
+        if (err == error.Parsing) {
+            try ErrorMsg.printErrors(p.errors.items, source, null); // TODO
+        }
+        return err;
+    };
 
     return Ast{
         .source = source,
@@ -65,14 +68,17 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
 
 pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !void {
     var resolver = Resolver{
-        .ast = &tree,
-        .error_list = .{
-            .allocator = allocator,
-            .source = tree.source,
-        },
+        .allocator = allocator,
+        .tree = &tree,
+        .errors = .{},
     };
     defer resolver.deinit();
-    try resolver.resolveRoot();
+    resolver.resolveRoot() catch |err| {
+        if (err == error.Resolving) {
+            try ErrorMsg.printErrors(resolver.errors.items, resolver.tree.source, null); // TODO
+        }
+        return err;
+    };
 }
 
 pub fn spanToList(tree: Ast, span: Ast.Index) []const Ast.Index {

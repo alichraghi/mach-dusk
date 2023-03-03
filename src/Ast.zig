@@ -49,7 +49,7 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
         p.error_list.deinit();
     }
 
-    // TODO: make sure tokens:nodes retio is right
+    // TODO: make sure tokens:nodes ratio is right
     const estimated_node_count = (tokens.len + 2) / 2;
     try p.nodes.ensureTotalCapacity(allocator, estimated_node_count);
 

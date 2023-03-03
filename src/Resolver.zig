@@ -53,7 +53,8 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                     member_loc,
                     "struct member with runtime-sized array type, must be the last member of the structure",
                     .{},
-                    &.{},
+                    null,
+                    null,
                 );
             },
             .user_type => {
@@ -62,7 +63,8 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                         member_loc,
                         "use of undeclared identifier '{s}'",
                         .{member_name},
-                        &.{},
+                        null,
+                        null,
                     );
                     continue;
                 };
@@ -72,7 +74,8 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                     member_loc,
                     "invalid struct member type '{s}'",
                     .{member_name},
-                    &.{},
+                    null,
+                    null,
                 );
             },
         }
@@ -101,7 +104,8 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
                 redecl_token_loc,
                 "redeclaration of '{s}'",
                 .{decl_name},
-                &.{"first declared here"}, // TODO
+                null,
+                null,
             );
         }
     }

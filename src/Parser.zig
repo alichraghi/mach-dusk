@@ -18,9 +18,6 @@ scratch: std.ArrayListUnmanaged(Ast.Index),
 error_list: ErrorList,
 
 pub fn parseRoot(p: *Parser) !void {
-    const estimated_nodes = (p.tokens.len + 2) / 2;
-    try p.nodes.ensureTotalCapacity(p.allocator, estimated_nodes);
-
     const root = p.addNode(.{
         .tag = .span,
         .main_token = undefined,
@@ -80,7 +77,8 @@ pub fn expectGlobalDecl(p: *Parser) !Ast.Index {
         p.peekToken(.loc, 0),
         "expected global declaration, found '{s}'",
         .{p.peekToken(.tag, 0).symbol()},
-        &.{},
+        null,
+        null,
     );
     return error.Parsing;
 }
@@ -106,7 +104,8 @@ pub fn attribute(p: *Parser) !?Ast.Index {
             p.getToken(.loc, ident_tok),
             "unknown attribute '{s}'",
             .{p.getToken(.loc, ident_tok).slice(p.source)},
-            comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.Attribute)})},
+            "valid options are [{s}]",
+            .{fieldNames(Ast.Attribute)},
         );
         return error.Parsing;
     };
@@ -140,7 +139,8 @@ pub fn attribute(p: *Parser) !?Ast.Index {
                         p.peekToken(.loc, 0),
                         "expected expression, but found '{s}'",
                         .{p.peekToken(.tag, 0).symbol()},
-                        &.{},
+                        null,
+                        null,
                     );
                     return error.Parsing;
                 };
@@ -154,20 +154,20 @@ pub fn attribute(p: *Parser) !?Ast.Index {
             node.tag = .attr_workgroup_size;
             var workgroup_size = Ast.Node.WorkgroupSize{
                 .x = try p.expression() orelse {
-                    try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size x parameter", .{}, &.{});
+                    try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size x parameter", .{}, null, null);
                     return error.Parsing;
                 },
             };
 
             if (p.eatToken(.comma) != null and p.peekToken(.tag, 0) != .paren_right) {
                 workgroup_size.y = try p.expression() orelse {
-                    try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size y parameter", .{}, &.{});
+                    try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size y parameter", .{}, null, null);
                     return error.Parsing;
                 };
 
                 if (p.eatToken(.comma) != null and p.peekToken(.tag, 0) != .paren_right) {
                     workgroup_size.z = try p.expression() orelse {
-                        try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size z parameter", .{}, &.{});
+                        try p.error_list.add(p.peekToken(.loc, 0), "expected workgroup_size z parameter", .{}, null, null);
                         return error.Parsing;
                     };
 
@@ -208,7 +208,8 @@ pub fn expectBuiltinValue(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown builtin value name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.BuiltinValue)})},
+        "valid options are [{s}]",
+        .{fieldNames(Ast.BuiltinValue)},
     );
     return error.Parsing;
 }
@@ -224,7 +225,8 @@ pub fn expectInterpolationType(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown interpolation type name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationType)})},
+        "valid options are [{s}]",
+        .{fieldNames(Ast.InterpolationType)},
     );
     return error.Parsing;
 }
@@ -240,7 +242,8 @@ pub fn expectInterpolationSample(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown interpolation sample name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.InterpolationSample)})},
+        "valid options are [{s}]",
+        .{fieldNames(Ast.InterpolationSample)},
     );
     return error.Parsing;
 }
@@ -274,7 +277,8 @@ pub fn globalVarDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected initializer expression, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -310,7 +314,8 @@ pub fn globalConstDecl(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected initializer expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -340,7 +345,8 @@ pub fn globalOverrideDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected initializer expression, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -385,7 +391,8 @@ pub fn structDecl(p: *Parser) !?Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected struct member, found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             }
@@ -426,7 +433,8 @@ pub fn constAssert(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -457,7 +465,8 @@ pub fn functionDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected function body, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -487,7 +496,8 @@ pub fn parameterList(p: *Parser) !?Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected function parameter, found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             }
@@ -568,7 +578,8 @@ pub fn expectBlock(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Index {
             p.peekToken(.loc, 0),
             "expected block statement, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -589,7 +600,8 @@ pub fn block(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected statement, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             p.findNextStmt();
             continue;
@@ -619,7 +631,8 @@ pub fn breakIfStatement(p: *Parser) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected condition expression, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -695,7 +708,8 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected condition expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -704,7 +718,8 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected if body block, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -730,7 +745,8 @@ pub fn ifStatement(p: *Parser) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected else body block, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -779,7 +795,8 @@ pub fn switchStatement(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected condition expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -863,7 +880,8 @@ pub fn varStatement(p: *Parser) !?Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected initializer expression, found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             };
@@ -896,7 +914,8 @@ pub fn varStatement(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected initializer expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -920,7 +939,8 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected expression, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -956,7 +976,8 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
                         p.peekToken(.loc, 0),
                         "expected expression, found '{s}'",
                         .{p.peekToken(.tag, 0).symbol()},
-                        &.{},
+                        null,
+                        null,
                     );
                     return error.Parsing;
                 };
@@ -972,7 +993,8 @@ pub fn varUpdateStatement(p: *Parser) !?Ast.Index {
                     p.getToken(.loc, op_token),
                     "invalid assignment operator '{s}'",
                     .{p.getToken(.tag, op_token).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             },
@@ -989,7 +1011,8 @@ pub fn whileStatement(p: *Parser) !?Ast.Index {
             p.peekToken(.loc, 0),
             "expected condition expression, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1008,7 +1031,8 @@ pub fn expectTypeSpecifier(p: *Parser) error{ OutOfMemory, Parsing }!Ast.Index {
             p.peekToken(.loc, 0),
             "expected type sepecifier, found '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1072,7 +1096,8 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
                         p.peekToken(.loc, 0),
                         "expected array size expression, found '{s}'",
                         .{p.peekToken(.tag, 0).symbol()},
-                        &.{},
+                        null,
+                        null,
                     );
                     return error.Parsing;
                 };
@@ -1150,7 +1175,8 @@ pub fn expectAddressSpace(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown address space '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AddressSpace)})},
+        "valid options are [{s}]",
+        .{fieldNames(Ast.AddressSpace)},
     );
     return error.Parsing;
 }
@@ -1166,7 +1192,8 @@ pub fn expectAccessMode(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown access mode '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        comptime &.{comptimePrint("valid options are [{s}]", .{fieldNames(Ast.AccessMode)})},
+        "valid options are [{s}]",
+        .{fieldNames(Ast.AccessMode)},
     );
     return error.Parsing;
 }
@@ -1178,7 +1205,8 @@ pub fn expectParenExpr(p: *Parser) !Ast.Index {
             p.peekToken(.loc, 0),
             "unable to parse expression '{s}'",
             .{p.peekToken(.tag, 0).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1216,7 +1244,8 @@ pub fn callExpr(p: *Parser) !?Ast.Index {
                     p.getToken(.loc, main_token),
                     "type '{s}' can not be constructed",
                     .{p.getToken(.tag, main_token).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             },
@@ -1269,7 +1298,8 @@ pub fn lhsExpression(p: *Parser) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "expected lhs expression, found '{s}'",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -1286,7 +1316,8 @@ pub fn lhsExpression(p: *Parser) !?Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected lhs expression, found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             },
@@ -1302,7 +1333,8 @@ pub fn lhsExpression(p: *Parser) !?Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected lhs expression, found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             },
@@ -1375,7 +1407,8 @@ pub fn unaryExpr(p: *Parser) error{ OutOfMemory, Parsing }!?Ast.Index {
             p.peekToken(.loc, 0),
             "unable to parse right side of '{s}' expression",
             .{p.getToken(.tag, op_token).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1406,7 +1439,8 @@ pub fn expectRelationalExpr(p: *Parser, lhs_unary: Ast.Index) !Ast.Index {
             p.peekToken(.loc, 0),
             "unable to parse right side of '{s}' expression",
             .{p.getToken(.tag, op_token).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1437,7 +1471,8 @@ pub fn expectShortCircuitExpr(p: *Parser, lhs_relational: Ast.Index) !Ast.Index 
                 p.peekToken(.loc, 0),
                 "unable to parse right side of '{s}' expression",
                 .{p.getToken(.tag, op_token).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -1471,7 +1506,8 @@ pub fn bitwiseExpr(p: *Parser, lhs: Ast.Index) !?Ast.Index {
                 p.peekToken(.loc, 0),
                 "unable to parse right side of '{s}' expression",
                 .{p.getToken(.tag, op_token).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -1501,7 +1537,8 @@ pub fn expectShiftExpr(p: *Parser, lhs: Ast.Index) !Ast.Index {
             p.peekToken(.loc, 0),
             "unable to parse right side of '{s}' expression",
             .{p.getToken(.tag, op_token).symbol()},
-            &.{},
+            null,
+            null,
         );
         return error.Parsing;
     };
@@ -1534,7 +1571,8 @@ pub fn expectAdditiveExpr(p: *Parser, lhs_mul: Ast.Index) !Ast.Index {
                 p.peekToken(.loc, 0),
                 "unable to parse right side of '{s}' expression",
                 .{p.getToken(.tag, op_token).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -1564,7 +1602,8 @@ pub fn expectMultiplicativeExpr(p: *Parser, lhs_unary: Ast.Index) !Ast.Index {
                 p.peekToken(.loc, 0),
                 "unable to parse right side of '{s}' expression",
                 .{p.peekToken(.tag, 0).symbol()},
-                &.{},
+                null,
+                null,
             );
             return error.Parsing;
         };
@@ -1593,7 +1632,8 @@ pub fn componentOrSwizzleSpecifier(p: *Parser, prefix: Ast.Index) !Ast.Index {
                     p.peekToken(.loc, 0),
                     "expected expression, but found '{s}'",
                     .{p.peekToken(.tag, 0).symbol()},
-                    &.{},
+                    null,
+                    null,
                 );
                 return error.Parsing;
             };
@@ -1738,7 +1778,8 @@ pub fn expectToken(p: *Parser, tag: Token.Tag) !Ast.Index {
         p.getToken(.loc, token),
         "expected '{s}', but found '{s}'",
         .{ tag.symbol(), p.getToken(.tag, token).symbol() },
-        &.{},
+        null,
+        null,
     );
     return error.Parsing;
 }

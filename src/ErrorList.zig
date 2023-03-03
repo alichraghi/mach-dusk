@@ -4,13 +4,21 @@ const ErrorList = @This();
 
 allocator: std.mem.Allocator,
 source: [:0]const u8,
+// file_name: []const u8,
 errors: std.ArrayListUnmanaged(u8) = .{},
 
 pub fn deinit(self: *ErrorList) void {
     self.errors.deinit(self.allocator);
 }
 
-pub fn add(self: *ErrorList, loc: Token.Loc, comptime err_fmt: []const u8, fmt_args: anytype, notes: []const []const u8) !void {
+pub fn add(
+    self: *ErrorList,
+    loc: Token.Loc,
+    comptime err_fmt: []const u8,
+    fmt_args: anytype,
+    comptime note_fmt: ?[]const u8,
+    note_args: anytype,
+) !void {
     var bw = std.io.bufferedWriter(self.errors.writer(self.allocator));
     const b = bw.writer();
     const term = std.debug.TTY.Config{ .escape_codes = {} };
@@ -53,16 +61,21 @@ pub fn add(self: *ErrorList, loc: Token.Loc, comptime err_fmt: []const u8, fmt_a
     try b.writeByteNTimes('~', loc.end - loc.start - 1);
     try b.writeByte('\n');
 
-    // notes
-    for (notes) |note| {
+    // note
+    if (note_fmt != null) {
         try term.setColor(b, .Cyan);
         try b.writeAll("note: ");
 
         // note message
         try term.setColor(b, .Reset);
         try term.setColor(b, .Bold);
-        try b.writeAll(note);
+        try b.print(note_fmt.?, note_args);
         try b.writeByte('\n');
+    } else {
+        // style enforce
+        if (@TypeOf(note_args) != @TypeOf(null)) {
+            @compileError("`note_args` must be `null` when `note_fmt` is null");
+        }
     }
 
     // clean up and flush

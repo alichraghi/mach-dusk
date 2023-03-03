@@ -13,10 +13,6 @@ tokens: std.ArrayListUnmanaged(Token) = .{},
 nodes: std.MultiArrayList(Node) = .{},
 extra: std.ArrayListUnmanaged(Index) = .{},
 
-pub fn getToken(self: Ast, i: Index) Token {
-    return self.tokens.items[std.math.min(i, self.tokens.items.len)];
-}
-
 /// parses TranslationUnit(WGSL Program)
 pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
     var p = Parser{
@@ -76,6 +72,10 @@ pub fn deinit(self: *Ast) void {
     self.nodes.deinit(self.allocator);
     self.extra.deinit(self.allocator);
     self.tokens.deinit(self.allocator);
+}
+
+pub fn getToken(self: Ast, i: Index) Token {
+    return self.tokens.items[std.math.min(i, self.tokens.items.len)];
 }
 
 pub const null_index: Index = 0;
@@ -138,6 +138,8 @@ pub const Node = struct {
         fn_param,
 
         // ####### Statement #######
+
+        // block = span(Statement)
 
         /// TOK : k_return
         /// LHS : Expr?
@@ -293,7 +295,7 @@ pub const Node = struct {
         /// RHS : --
         user_type,
 
-        // ####### Attribute #######
+        // ####### Attr #######
 
         // TOK : attr
         attr,
@@ -474,51 +476,76 @@ pub const Node = struct {
     };
 
     pub const GlobalVarDecl = struct {
+        /// span(Attr)?
         attrs: Index = null_index,
-        name: Index, // Token
-        addr_space: Index = null_index, // Token
-        access_mode: Index = null_index, // Token
+        /// Token(ident)
+        name: Index,
+        /// Token(AddrSpace)?
+        addr_space: Index = null_index,
+        /// Token(AccessMode)?
+        access_mode: Index = null_index,
+        /// Type?
         type: Index = null_index,
     };
 
     pub const VarDecl = struct {
-        name: Index, // Token
-        addr_space: Index = null_index, // Token
-        access_mode: Index = null_index, // Token
+        /// Token(ident)
+        name: Index,
+        /// Token(AddrSpace)?
+        addr_space: Index = null_index,
+        /// Token(AccessMode)?
+        access_mode: Index = null_index,
+        /// Type?
         type: Index = null_index,
     };
 
     pub const OverrideDecl = struct {
+        /// span(Attr)?
         attrs: Index = null_index,
+        /// Type?
         type: Index = null_index,
     };
 
     pub const PtrType = struct {
-        addr_space: Index, // Token
-        access_mode: Index = null_index, // Token
+        /// Token(AddrSpace)
+        addr_space: Index,
+        /// Token(AccessMode)?
+        access_mode: Index = null_index,
     };
 
     pub const WorkgroupSize = struct {
+        /// Expr
         x: Index,
+        /// Expr?
         y: Index = null_index,
+        /// Expr?
         z: Index = null_index,
     };
 
     pub const FnProto = struct {
+        /// span(Attr)?
         attrs: Index = null_index,
+        /// span(fn_param)?
         params: Index = null_index,
+        /// span(Attr)?
         result_attrs: Index = null_index,
+        /// Type?
         result_type: Index = null_index,
     };
 
     pub const IfStatement = struct {
+        /// Expr
         cond: Index,
+        /// block
         body: Index,
     };
 
     pub const ForHeader = struct {
+        /// var_decl, const_decl, let_decl, phony_assign, compound_assign
         init: Index = null_index,
+        /// Expr
         cond: Index = null_index,
+        /// call, phony_assign, compound_assign
         update: Index = null_index,
     };
 };
@@ -580,6 +607,3 @@ pub const Attribute = enum {
     workgroup_size,
     interpolate,
 };
-
-const expect = std.testing.expect;
-const expectEqualStrings = std.testing.expectEqualStrings;

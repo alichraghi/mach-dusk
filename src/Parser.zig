@@ -411,7 +411,7 @@ pub fn functionDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
     _ = try p.expectToken(.ident);
 
     _ = try p.expectToken(.paren_left);
-    const params = try p.expectParameterList();
+    const params = try p.parameterList() orelse Ast.null_index;
     _ = try p.expectToken(.paren_right);
 
     var result_attrs = Ast.null_index;
@@ -445,7 +445,7 @@ pub fn functionDecl(p: *Parser, attrs: ?Ast.Index) !?Ast.Index {
     });
 }
 
-pub fn expectParameterList(p: *Parser) !Ast.Index {
+pub fn parameterList(p: *Parser) !?Ast.Index {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
     while (true) {
@@ -466,6 +466,7 @@ pub fn expectParameterList(p: *Parser) !Ast.Index {
         if (p.eatToken(.comma) == null) break;
     }
     const list = p.scratch.items[scratch_top..];
+    if (list.len == 0) return null;
     return try p.listToSpan(list);
 }
 

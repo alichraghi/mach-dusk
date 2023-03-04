@@ -6,7 +6,7 @@ const Resolver = @This();
 
 allocator: std.mem.Allocator,
 tree: *const Ast,
-errors: std.ArrayListUnmanaged(ErrorMsg),
+errors: std.ArrayListUnmanaged(*ErrorMsg),
 
 pub fn deinit(self: *Resolver) void {
     for (self.errors.items) |err| err.deinit(self.allocator);
@@ -54,7 +54,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                     member_loc,
                     "struct member with runtime-sized array type, must be the last member of the structure",
                     .{},
-                    &.{},
+                    null,
                 );
             },
             .user_type => {
@@ -63,7 +63,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                         member_loc,
                         "use of undeclared identifier '{s}'",
                         .{member_name},
-                        &.{},
+                        null,
                     );
                     continue;
                 };
@@ -73,7 +73,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
                     member_loc,
                     "invalid struct member type '{s}'",
                     .{member_name},
-                    &.{},
+                    null,
                 );
             },
         }
@@ -102,7 +102,13 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
                 redecl_token_loc,
                 "redeclaration of '{s}'",
                 .{decl_name},
-                &.{},
+                try ErrorMsg.create(
+                    self.allocator,
+                    decl_token_loc,
+                    "other declaration here",
+                    .{},
+                    null,
+                ),
             );
         }
     }
@@ -127,8 +133,8 @@ pub fn addError(
     loc: ?Token.Loc,
     comptime format: []const u8,
     args: anytype,
-    notes: []const ErrorMsg,
+    note: ?*ErrorMsg,
 ) !void {
-    const err_msg = try ErrorMsg.create(self.allocator, loc, format, args, notes);
+    const err_msg = try ErrorMsg.create(self.allocator, loc, format, args, note);
     try self.errors.append(self.allocator, err_msg);
 }

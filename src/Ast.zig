@@ -22,8 +22,13 @@ pub fn deinit(tree: *Ast, allocator: std.mem.Allocator) void {
     tree.* = undefined;
 }
 
+pub const ParseResult = union(enum) {
+    errors: []*ErrorMsg,
+    tree: Ast,
+};
+
 /// parses a TranslationUnit (WGSL Program)
-pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
+pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
     const estimated_tokens = source.len / 8;
     var tokens = std.MultiArrayList(Token){};
     try tokens.ensureTotalCapacity(allocator, estimated_tokens);
@@ -45,7 +50,11 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
         .scratch = .{},
         .errors = .{},
     };
-    defer p.deinit();
+    defer p.scratch.deinit(p.allocator);
+    errdefer {
+        for (p.errors.items) |err_msg| err_msg.deinit(allocator);
+        p.errors.deinit(p.allocator);
+    }
 
     // TODO: make sure tokens:nodes ratio is right
     const estimated_node_count = (tokens.len + 2) / 2;
@@ -53,32 +62,45 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !Ast {
 
     p.parseRoot() catch |err| {
         if (err == error.Parsing) {
-            try ErrorMsg.printErrors(p.errors.items, source, null); // TODO
+            return .{ .errors = try p.errors.toOwnedSlice(allocator) };
         }
         return err;
     };
+    for (p.errors.items) |err_msg| err_msg.deinit(allocator);
+    p.errors.deinit(p.allocator);
 
-    return Ast{
-        .source = source,
-        .tokens = tokens.toOwnedSlice(),
-        .nodes = p.nodes.toOwnedSlice(),
-        .extra = try p.extra.toOwnedSlice(allocator),
+    return .{
+        .tree = .{
+            .source = source,
+            .tokens = tokens.toOwnedSlice(),
+            .nodes = p.nodes.toOwnedSlice(),
+            .extra = try p.extra.toOwnedSlice(allocator),
+        },
     };
 }
 
-pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !void {
+pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !?[]*ErrorMsg {
     var resolver = Resolver{
         .allocator = allocator,
         .tree = &tree,
         .errors = .{},
     };
-    defer resolver.deinit();
+
+    errdefer {
+        for (resolver.errors.items) |err_msg| err_msg.deinit(allocator);
+        resolver.errors.deinit(resolver.allocator);
+    }
+
     resolver.resolveRoot() catch |err| {
         if (err == error.Resolving) {
-            try ErrorMsg.printErrors(resolver.errors.items, resolver.tree.source, null); // TODO
+            return try resolver.errors.toOwnedSlice(allocator);
         }
         return err;
     };
+    for (resolver.errors.items) |err_msg| err_msg.deinit(allocator);
+    resolver.errors.deinit(resolver.allocator);
+
+    return null;
 }
 
 pub fn spanToList(tree: Ast, span: Ast.Index) []const Ast.Index {

@@ -16,55 +16,53 @@ fn readTestFile(comptime path: []const u8) ![:0]const u8 {
 }
 
 // TODO: move this to cli/main.zig
-pub fn printErrors(errors: []*dusk.ErrorMsg, source: []const u8, file_path: ?[]const u8) !void {
+pub fn printErrors(errors: []dusk.ErrorMsg, source: []const u8, file_path: ?[]const u8) !void {
     var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
     const b = bw.writer();
     const term = std.debug.TTY.Config{ .escape_codes = {} };
 
-    for (errors) |err| {
+    for (errors) |*err| {
         defer err.deinit(allocator);
 
-        const loc = err.loc.?;
-        const loc_extra = loc.extraInfo(source);
+        const loc_extra = err.loc.extraInfo(source);
 
-        // 'file:line:column'
+        // 'file:line:column error: <MSG>'
         try term.setColor(b, .Bold);
         try b.print("{?s}:{d}:{d} ", .{ file_path, loc_extra.line, loc_extra.col });
-
-        // 'error: '
         try term.setColor(b, .Red);
         try b.writeAll("error: ");
-
-        // error message
         try term.setColor(b, .Reset);
         try term.setColor(b, .Bold);
         try b.writeAll(err.msg);
         try b.writeByte('\n');
 
-        // error code
-        try printCode(b, term, source, loc);
+        try printCode(b, term, source, err.loc);
 
         // note
         if (err.note) |note| {
+            if (note.loc) |note_loc| {
+                const note_loc_extra = note_loc.extraInfo(source);
+
+                try term.setColor(b, .Reset);
+                try term.setColor(b, .Bold);
+                try b.print("{?s}:{d}:{d} ", .{ file_path, note_loc_extra.line, note_loc_extra.col });
+            }
             try term.setColor(b, .Cyan);
             try b.writeAll("note: ");
 
-            // note message
             try term.setColor(b, .Reset);
             try term.setColor(b, .Bold);
             try b.writeAll(note.msg);
             try b.writeByte('\n');
 
             if (note.loc) |note_loc| {
-                // note code
                 try printCode(b, term, source, note_loc);
             }
         }
 
-        // clean up and flush
         try term.setColor(b, .Reset);
-        try bw.flush();
     }
+    try bw.flush();
 }
 
 fn printCode(writer: anytype, term: std.debug.TTY.Config, source: []const u8, loc: dusk.Token.Loc) !void {
@@ -104,6 +102,7 @@ fn expectTree(source: [:0]const u8) !dusk.Ast {
         },
         .errors => |err_msgs| {
             try printErrors(err_msgs, source, null);
+            allocator.free(err_msgs);
         },
     }
 
@@ -111,7 +110,7 @@ fn expectTree(source: [:0]const u8) !dusk.Ast {
 }
 
 test "empty" {
-    const source = "";
+    const source = "^";
     var tree = try expectTree(source);
     defer tree.deinit(allocator);
 }

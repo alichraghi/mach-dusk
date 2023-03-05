@@ -1,15 +1,15 @@
 const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
-const ErrorMsg = @import("ErrorMsg.zig");
+const ErrorMsg = @import("main.zig").ErrorMsg;
 const Resolver = @This();
 
 allocator: std.mem.Allocator,
 tree: *const Ast,
-errors: std.ArrayListUnmanaged(*ErrorMsg),
+errors: std.ArrayListUnmanaged(ErrorMsg),
 
 pub fn deinit(self: *Resolver) void {
-    for (self.errors.items) |err| err.deinit(self.allocator);
+    for (self.errors.items) |*err_msg| err_msg.deinit(self.allocator);
     self.errors.deinit(self.allocator);
 }
 
@@ -102,12 +102,11 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
                 redecl_token_loc,
                 "redeclaration of '{s}'",
                 .{decl_name},
-                try ErrorMsg.create(
+                try ErrorMsg.Note.create(
                     self.allocator,
                     decl_token_loc,
                     "other declaration here",
                     .{},
-                    null,
                 ),
             );
         }
@@ -130,10 +129,10 @@ pub fn declNameToken(self: *Resolver, node: Ast.Index) ?Ast.Index {
 
 pub fn addError(
     self: *Resolver,
-    loc: ?Token.Loc,
+    loc: Token.Loc,
     comptime format: []const u8,
     args: anytype,
-    note: ?*ErrorMsg,
+    note: ?ErrorMsg.Note,
 ) !void {
     const err_msg = try ErrorMsg.create(self.allocator, loc, format, args, note);
     try self.errors.append(self.allocator, err_msg);

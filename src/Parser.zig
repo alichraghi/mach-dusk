@@ -3,7 +3,7 @@ const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
-const ErrorMsg = @import("ErrorMsg.zig");
+const ErrorMsg = @import("main.zig").ErrorMsg;
 const comptimePrint = std.fmt.comptimePrint;
 const fieldNames = std.meta.fieldNames;
 const Parser = @This();
@@ -11,20 +11,22 @@ const Parser = @This();
 allocator: std.mem.Allocator,
 source: [:0]const u8,
 tok_i: Ast.Index,
-tokens: std.MultiArrayList(Token),
+tokens: Ast.TokenList.Slice,
 nodes: std.MultiArrayList(Ast.Node),
 extra: std.ArrayListUnmanaged(Ast.Index),
 scratch: std.ArrayListUnmanaged(Ast.Index),
-errors: std.ArrayListUnmanaged(*ErrorMsg),
+errors: std.ArrayListUnmanaged(ErrorMsg),
+
+pub fn deinit(p: *Parser) void {
+    p.nodes.deinit(p.allocator);
+    p.extra.deinit(p.allocator);
+    p.scratch.deinit(p.allocator);
+    for (p.errors.items) |*err_msg| err_msg.deinit(p.allocator);
+    p.errors.deinit(p.allocator);
+}
 
 pub fn parseRoot(p: *Parser) !void {
-    const root = p.addNode(.{
-        .tag = .span,
-        .main_token = undefined,
-    }) catch unreachable;
-
-    const scratch_top = p.scratch.items.len;
-    defer p.scratch.shrinkRetainingCapacity(scratch_top);
+    const root = try p.addNode(.{ .tag = .span, .main_token = undefined });
 
     while (p.peekToken(.tag, 0) != .eof) {
         const decl = try p.expectGlobalDeclRecoverable() orelse continue;
@@ -35,9 +37,8 @@ pub fn parseRoot(p: *Parser) !void {
         return error.Parsing;
     }
 
-    const list = p.scratch.items[scratch_top..];
-    try p.extra.appendSlice(p.allocator, list);
-    p.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.extra.items.len - list.len);
+    try p.extra.appendSlice(p.allocator, p.scratch.items);
+    p.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.extra.items.len - p.scratch.items.len);
     p.nodes.items(.rhs)[root] = @intCast(Ast.Index, p.extra.items.len);
 }
 
@@ -102,12 +103,11 @@ pub fn attribute(p: *Parser) !?Ast.Index {
             p.getToken(.loc, ident_tok),
             "unknown attribute '{s}'",
             .{p.getToken(.loc, ident_tok).slice(p.source)},
-            try ErrorMsg.create(
+            try ErrorMsg.Note.create(
                 p.allocator,
                 null,
                 "valid options are [{s}]",
                 .{fieldNames(Ast.Attribute)},
-                null,
             ),
         );
         return error.Parsing;
@@ -210,12 +210,11 @@ pub fn expectBuiltinValue(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown builtin value name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        try ErrorMsg.create(
+        try ErrorMsg.Note.create(
             p.allocator,
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.BuiltinValue)},
-            null,
         ),
     );
     return error.Parsing;
@@ -232,12 +231,11 @@ pub fn expectInterpolationType(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown interpolation type name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        try ErrorMsg.create(
+        try ErrorMsg.Note.create(
             p.allocator,
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.InterpolationType)},
-            null,
         ),
     );
     return error.Parsing;
@@ -254,12 +252,11 @@ pub fn expectInterpolationSample(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown interpolation sample name '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        try ErrorMsg.create(
+        try ErrorMsg.Note.create(
             p.allocator,
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.InterpolationSample)},
-            null,
         ),
     );
     return error.Parsing;
@@ -1170,12 +1167,11 @@ pub fn expectAddressSpace(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown address space '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        try ErrorMsg.create(
+        try ErrorMsg.Note.create(
             p.allocator,
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.AddressSpace)},
-            null,
         ),
     );
     return error.Parsing;
@@ -1192,12 +1188,11 @@ pub fn expectAccessMode(p: *Parser) !Ast.Index {
         p.getToken(.loc, token),
         "unknown access mode '{s}'",
         .{p.getToken(.loc, token).slice(p.source)},
-        try ErrorMsg.create(
+        try ErrorMsg.Note.create(
             p.allocator,
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.AccessMode)},
-            null,
         ),
     );
     return error.Parsing;
@@ -1711,10 +1706,10 @@ fn findNextStmt(p: *Parser) void {
 
 pub fn addError(
     p: *Parser,
-    loc: ?Token.Loc,
+    loc: Token.Loc,
     comptime format: []const u8,
     args: anytype,
-    note: ?*ErrorMsg,
+    note: ?ErrorMsg.Note,
 ) !void {
     const err_msg = try ErrorMsg.create(p.allocator, loc, format, args, note);
     try p.errors.append(p.allocator, err_msg);

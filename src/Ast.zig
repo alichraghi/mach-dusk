@@ -3,7 +3,7 @@ const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const Parser = @import("Parser.zig");
 const Resolver = @import("Resolver.zig");
-const ErrorMsg = @import("ErrorMsg.zig");
+const ErrorMsg = @import("main.zig").ErrorMsg;
 
 const Ast = @This();
 
@@ -23,7 +23,7 @@ pub fn deinit(tree: *Ast, allocator: std.mem.Allocator) void {
 }
 
 pub const ParseResult = union(enum) {
-    errors: []*ErrorMsg,
+    errors: []ErrorMsg,
     tree: Ast,
 };
 
@@ -44,17 +44,14 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
         .allocator = allocator,
         .source = source,
         .tok_i = 0,
-        .tokens = tokens,
+        .tokens = tokens.toOwnedSlice(),
         .nodes = .{},
         .extra = .{},
         .scratch = .{},
         .errors = .{},
     };
-    defer p.scratch.deinit(p.allocator);
-    errdefer {
-        for (p.errors.items) |err_msg| err_msg.deinit(allocator);
-        p.errors.deinit(p.allocator);
-    }
+    defer p.deinit();
+    errdefer p.tokens.deinit(allocator);
 
     // TODO: make sure tokens:nodes ratio is right
     const estimated_node_count = (tokens.len + 2) / 2;
@@ -62,34 +59,29 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
 
     p.parseRoot() catch |err| {
         if (err == error.Parsing) {
+            p.tokens.deinit(allocator);
             return .{ .errors = try p.errors.toOwnedSlice(allocator) };
         }
         return err;
     };
-    for (p.errors.items) |err_msg| err_msg.deinit(allocator);
-    p.errors.deinit(p.allocator);
 
     return .{
         .tree = .{
             .source = source,
-            .tokens = tokens.toOwnedSlice(),
+            .tokens = p.tokens,
             .nodes = p.nodes.toOwnedSlice(),
             .extra = try p.extra.toOwnedSlice(allocator),
         },
     };
 }
 
-pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !?[]*ErrorMsg {
+pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !?[]ErrorMsg {
     var resolver = Resolver{
         .allocator = allocator,
         .tree = &tree,
         .errors = .{},
     };
-
-    errdefer {
-        for (resolver.errors.items) |err_msg| err_msg.deinit(allocator);
-        resolver.errors.deinit(resolver.allocator);
-    }
+    defer resolver.deinit();
 
     resolver.resolveRoot() catch |err| {
         if (err == error.Resolving) {
@@ -97,8 +89,6 @@ pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !?[]*ErrorMsg {
         }
         return err;
     };
-    for (resolver.errors.items) |err_msg| err_msg.deinit(allocator);
-    resolver.errors.deinit(resolver.allocator);
 
     return null;
 }

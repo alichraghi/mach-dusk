@@ -1142,6 +1142,64 @@ pub fn typeSpecifierWithoutIdent(p: *Parser) !?Ast.Index {
                 .rhs = extra,
             });
         },
+        .k_texture_sampled_1d,
+        .k_texture_sampled_2d,
+        .k_texture_sampled_2d_array,
+        .k_texture_sampled_3d,
+        .k_texture_sampled_cube,
+        .k_texture_sampled_cube_array,
+        => {
+            _ = p.advanceToken();
+            _ = try p.expectToken(.less_than);
+            const elem_type = try p.expectTypeSpecifier();
+            _ = try p.expectToken(.greater_than);
+            return try p.addNode(.{
+                .tag = .sampled_texture_type,
+                .main_token = main_token,
+                .lhs = elem_type,
+            });
+        },
+        .k_texture_multisampled_2d => {
+            return try p.addNode(.{
+                .tag = .multisampled_texture_type,
+                .main_token = main_token,
+            });
+        },
+        .k_texture_external => {
+            return try p.addNode(.{
+                .tag = .external_texture_type,
+                .main_token = main_token,
+            });
+        },
+        .k_texture_depth_2d,
+        .k_texture_depth_2d_array,
+        .k_texture_depth_cube,
+        .k_texture_depth_cube_array,
+        .k_texture_depth_multisampled_2d,
+        => {
+            return try p.addNode(.{
+                .tag = .depth_texture_type,
+                .main_token = main_token,
+            });
+        },
+        .k_texture_storage_1d,
+        .k_texture_storage_2d,
+        .k_texture_storage_2d_array,
+        .k_texture_storage_3d,
+        => {
+            _ = p.advanceToken();
+            _ = try p.expectToken(.less_than);
+            const texel_format = try p.expectTexelFormat();
+            _ = try p.expectToken(.comma);
+            const access_mode = try p.expectAccessMode();
+            _ = try p.expectToken(.greater_than);
+            return try p.addNode(.{
+                .tag = .storage_texture_type,
+                .main_token = main_token,
+                .lhs = texel_format,
+                .rhs = access_mode,
+            });
+        },
         else => return null,
     }
 }
@@ -1209,6 +1267,27 @@ pub fn expectAccessMode(p: *Parser) !Ast.Index {
             null,
             "valid options are [{s}]",
             .{fieldNames(Ast.AccessMode)},
+        ),
+    );
+    return error.Parsing;
+}
+
+pub fn expectTexelFormat(p: *Parser) !Ast.Index {
+    const token = p.advanceToken();
+    if (p.getToken(.tag, token) == .ident) {
+        const str = p.getToken(.loc, token).slice(p.source);
+        if (std.meta.stringToEnum(Ast.TexelFormat, str)) |_| return token;
+    }
+
+    try p.addError(
+        p.getToken(.loc, token),
+        "unknown address space '{s}'",
+        .{p.getToken(.loc, token).slice(p.source)},
+        try ErrorMsg.Note.create(
+            p.allocator,
+            null,
+            "valid options are [{s}]",
+            .{fieldNames(Ast.TexelFormat)},
         ),
     );
     return error.Parsing;

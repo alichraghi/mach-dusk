@@ -347,6 +347,35 @@ pub const Node = struct {
         /// RHS : PtrType
         ptr_type,
 
+        /// TOK : k_texture_1d, k_texture_2d, k_texture_2d_array,
+        ///       k_texture_3d, k_texture_cube, k_texture_cube_array
+        /// LHS : Type
+        /// RHS : --
+        sampled_texture_type,
+
+        /// TOK : k_texture_multisampled_2d
+        /// LHS : Type
+        /// RHS : --
+        multisampled_texture_type,
+
+        /// TOK : k_texture_external
+        /// LHS : Type
+        /// RHS : --
+        external_texture_type,
+
+        /// TOK : k_texture_storage_1d, k_texture_storage_2d,
+        ///       k_texture_storage_2d_array, k_texture_storage_3d
+        /// LHS : Index(Token(TexelFormat))
+        /// RHS : Index(Token(AccessMode))
+        storage_texture_type,
+
+        /// TOK : k_texture_depth_2d, k_texture_depth_2d_array
+        ///       k_texture_depth_cube, k_texture_depth_cube_array
+        ///       k_texture_depth_multisampled_2d
+        /// LHS : --
+        /// RHS : --
+        depth_texture_type,
+
         /// TOK : ident
         /// LHS : --
         /// RHS : --
@@ -663,4 +692,24 @@ pub const Attribute = enum {
     builtin,
     workgroup_size,
     interpolate,
+};
+
+pub const TexelFormat = enum {
+    rgba8unorm,
+    rgba8snorm,
+    rgba8uint,
+    rgba8sint,
+    rgba16uint,
+    rgba16sint,
+    rgba16float,
+    r32uint,
+    r32sint,
+    r32float,
+    rg32uint,
+    rg32sint,
+    rg32float,
+    rgba32uint,
+    rgba32sint,
+    rgba32float,
+    bgra8unorm,
 };

@@ -1,8 +1,8 @@
 const std = @import("std");
+const Analyse = @import("Analyse.zig");
+const Parser = @import("Parser.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
-const Parser = @import("Parser.zig");
-const Resolver = @import("Resolver.zig");
 const ErrorMsg = @import("main.zig").ErrorMsg;
 
 const Ast = @This();
@@ -75,17 +75,17 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
     };
 }
 
-pub fn resolve(tree: Ast, allocator: std.mem.Allocator) !?[]ErrorMsg {
-    var resolver = Resolver{
+pub fn analyse(tree: Ast, allocator: std.mem.Allocator) !?[]ErrorMsg {
+    var analyser = Analyse{
         .allocator = allocator,
         .tree = &tree,
         .errors = .{},
     };
-    defer resolver.deinit();
+    defer analyser.deinit();
 
-    resolver.resolveRoot() catch |err| {
-        if (err == error.Resolving) {
-            return try resolver.errors.toOwnedSlice(allocator);
+    analyser.analyseRoot() catch |err| {
+        if (err == error.Analysing) {
+            return try analyser.errors.toOwnedSlice(allocator);
         }
         return err;
     };

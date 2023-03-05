@@ -2,18 +2,18 @@ const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
 const ErrorMsg = @import("main.zig").ErrorMsg;
-const Resolver = @This();
+const Analyse = @This();
 
 allocator: std.mem.Allocator,
 tree: *const Ast,
 errors: std.ArrayListUnmanaged(ErrorMsg),
 
-pub fn deinit(self: *Resolver) void {
+pub fn deinit(self: *Analyse) void {
     for (self.errors.items) |*err_msg| err_msg.deinit(self.allocator);
     self.errors.deinit(self.allocator);
 }
 
-pub fn resolveRoot(self: *Resolver) !void {
+pub fn analyseRoot(self: *Analyse) !void {
     const global_items = self.tree.spanToList(0);
 
     for (global_items, 0..) |node_i, i| {
@@ -22,11 +22,11 @@ pub fn resolveRoot(self: *Resolver) !void {
     }
 
     if (self.errors.items.len > 0) {
-        return error.Resolving;
+        return error.Analysing;
     }
 }
 
-pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
+pub fn globalDecl(self: *Analyse, parent_scope: []const Ast.Index, node_i: Ast.Index) !void {
     switch (self.tree.nodeTag(node_i)) {
         .global_variable => {}, // TODO
         .struct_decl => try self.structDecl(parent_scope, node_i),
@@ -34,7 +34,7 @@ pub fn globalDecl(self: *Resolver, parent_scope: []const Ast.Index, node_i: Ast.
     }
 }
 
-pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.Index) !void {
+pub fn structDecl(self: *Analyse, parent_scope: []const Ast.Index, node: Ast.Index) !void {
     const member_list = self.tree.spanToList(self.tree.nodeLHS(node));
     for (member_list, 0..) |member_node, i| {
         try self.checkRedeclaration(member_list[i + 1 ..], member_node);
@@ -80,7 +80,7 @@ pub fn structDecl(self: *Resolver, parent_scope: []const Ast.Index, node: Ast.In
     }
 }
 
-pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Index, name: []const u8) ?Ast.Index {
+pub fn findDeclNode(self: *Analyse, scope_items: []const Ast.Index, name: []const u8) ?Ast.Index {
     for (scope_items) |node| {
         const node_token = self.declNameToken(node) orelse continue;
         if (std.mem.eql(u8, name, self.tree.tokenLoc(node_token).slice(self.tree.source))) {
@@ -90,7 +90,7 @@ pub fn findDeclNode(self: *Resolver, scope_items: []const Ast.Index, name: []con
     return null;
 }
 
-pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_node: Ast.Index) !void {
+pub fn checkRedeclaration(self: *Analyse, scope_items: []const Ast.Index, decl_node: Ast.Index) !void {
     const decl_token_loc = self.tree.tokenLoc(self.declNameToken(decl_node).?);
     const decl_name = decl_token_loc.slice(self.tree.source);
     for (scope_items) |redecl_node| {
@@ -113,7 +113,7 @@ pub fn checkRedeclaration(self: *Resolver, scope_items: []const Ast.Index, decl_
     }
 }
 
-pub fn declNameToken(self: *Resolver, node: Ast.Index) ?Ast.Index {
+pub fn declNameToken(self: *Analyse, node: Ast.Index) ?Ast.Index {
     return switch (self.tree.nodeTag(node)) {
         .global_variable => self.tree.extraData(Ast.Node.GlobalVarDecl, self.tree.nodeLHS(node)).name,
         .struct_decl,
@@ -128,7 +128,7 @@ pub fn declNameToken(self: *Resolver, node: Ast.Index) ?Ast.Index {
 }
 
 pub fn addError(
-    self: *Resolver,
+    self: *Analyse,
     loc: Token.Loc,
     comptime format: []const u8,
     args: anytype,

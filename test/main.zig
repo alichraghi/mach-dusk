@@ -93,20 +93,21 @@ fn printCode(writer: anytype, term: std.debug.TTY.Config, source: []const u8, lo
 fn expectTree(source: [:0]const u8) !dusk.Ast {
     var res = try dusk.Ast.parse(allocator, source);
     switch (res) {
-        .tree => |tree| {
-            if (try tree.resolve(allocator)) |errors| {
+        .tree => |*tree| {
+            errdefer tree.deinit(allocator);
+            if (try tree.analyse(allocator)) |errors| {
                 try printErrors(errors, source, null);
                 allocator.free(errors);
+                return error.Analysing;
             }
-            return tree;
+            return tree.*;
         },
         .errors => |err_msgs| {
             try printErrors(err_msgs, source, null);
             allocator.free(err_msgs);
+            return error.Parsing;
         },
     }
-
-    return error.UnexpectedResult;
 }
 
 test "empty" {

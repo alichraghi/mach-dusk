@@ -5,6 +5,13 @@ pub const Analyse = @import("Analyse.zig");
 pub const Parser = @import("Parser.zig");
 pub const Token = @import("Token.zig");
 pub const Tokenizer = @import("Tokenizer.zig");
+
+pub const Extension = enum {
+    f16,
+
+    pub const Array = std.enums.EnumArray(Extension, bool);
+};
+
 pub const ErrorMsg = struct {
     loc: Token.Loc,
     msg: []const u8,

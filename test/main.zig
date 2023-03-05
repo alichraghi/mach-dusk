@@ -111,7 +111,7 @@ fn expectTree(source: [:0]const u8) !dusk.Ast {
 }
 
 test "empty" {
-    const source = "^";
+    const source = "";
     var tree = try expectTree(source);
     defer tree.deinit(allocator);
 }

@@ -3,8 +3,6 @@ const NUM_PARTICLES: u32 = 1500u;
 struct Particle {
   pos : vec2<f32>,
   vel : vec2<f32>,
-  vel : array<f32>, // REMOVE
-  urmom: SimParam, // REMOVE
 }
 
 struct SimParams {

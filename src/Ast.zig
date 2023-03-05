@@ -4,6 +4,7 @@ const Parser = @import("Parser.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
 const ErrorMsg = @import("main.zig").ErrorMsg;
+const Extension = @import("main.zig").Extension;
 
 const Ast = @This();
 
@@ -49,6 +50,7 @@ pub fn parse(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
         .extra = .{},
         .scratch = .{},
         .errors = .{},
+        .extensions = Extension.Array.initFill(false),
     };
     defer p.deinit();
     errdefer p.tokens.deinit(allocator);

@@ -3,6 +3,7 @@ const std = @import("std");
 const Ast = @import("Ast.zig");
 const Token = @import("Token.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const Extension = @import("main.zig").Extension;
 const ErrorMsg = @import("main.zig").ErrorMsg;
 const comptimePrint = std.fmt.comptimePrint;
 const fieldNames = std.meta.fieldNames;
@@ -16,6 +17,7 @@ nodes: std.MultiArrayList(Ast.Node),
 extra: std.ArrayListUnmanaged(Ast.Index),
 scratch: std.ArrayListUnmanaged(Ast.Index),
 errors: std.ArrayListUnmanaged(ErrorMsg),
+extensions: Extension.Array,
 
 pub fn deinit(p: *Parser) void {
     p.nodes.deinit(p.allocator);
@@ -27,6 +29,10 @@ pub fn deinit(p: *Parser) void {
 
 pub fn parseRoot(p: *Parser) !void {
     const root = try p.addNode(.{ .tag = .span, .main_token = undefined });
+
+    while (try p.globalDirective()) |ext| {
+        p.extensions.set(ext, true);
+    }
 
     while (p.peekToken(.tag, 0) != .eof) {
         const decl = try p.expectGlobalDeclRecoverable() orelse continue;
@@ -40,6 +46,16 @@ pub fn parseRoot(p: *Parser) !void {
     try p.extra.appendSlice(p.allocator, p.scratch.items);
     p.nodes.items(.lhs)[root] = @intCast(Ast.Index, p.extra.items.len - p.scratch.items.len);
     p.nodes.items(.rhs)[root] = @intCast(Ast.Index, p.extra.items.len);
+}
+
+pub fn globalDirective(p: *Parser) !?Extension {
+    _ = p.eatToken(.k_enable) orelse return null;
+    const ext_token = try p.expectToken(.ident);
+    const ext = std.meta.stringToEnum(Extension, p.getToken(.loc, ext_token).slice(p.source)) orelse {
+        try p.addError(p.getToken(.loc, ext_token), "invalid extension", .{}, null);
+        return error.Parsing;
+    };
+    return ext;
 }
 
 pub fn expectGlobalDeclRecoverable(p: *Parser) !?Ast.Index {

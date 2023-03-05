@@ -49,18 +49,22 @@ pub fn structDecl(self: *Analyse, parent_scope: []const Ast.Index, node: Ast.Ind
             .matrix_type,
             .atomic_type,
             => {},
-            .array_type => if (self.tree.nodeRHS(member_type_node) == Ast.null_index and i != member_list.len - 1) {
-                try self.addError(
-                    member_loc,
-                    "struct member with runtime-sized array type, must be the last member of the structure",
-                    .{},
-                    null,
-                );
+            .array_type => {
+                if (self.tree.nodeRHS(member_type_node) == Ast.null_index and
+                    i != member_list.len - 1)
+                {
+                    try self.addError(
+                        member_loc,
+                        "struct member with runtime-sized array type, must be the last member of the structure",
+                        .{},
+                        null,
+                    );
+                }
             },
             .user_type => {
                 _ = self.findDeclNode(parent_scope, member_name) orelse {
                     try self.addError(
-                        member_loc,
+                        member_loc, // TODO
                         "use of undeclared identifier '{s}'",
                         .{member_name},
                         null,
